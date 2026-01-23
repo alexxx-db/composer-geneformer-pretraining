@@ -1,4 +1,4 @@
-experiment_name: torchrun-hello-world
+experiment_name: torchrun-hello-world-guanyu
 environment:
   env_variables:
     NCCL_DEBUG: "INFO"
@@ -9,7 +9,7 @@ compute:
 max_retries: 0
 command: |-
 
-  TRAIN_SCRIPT="/Workspace/path/to/train.py"
+  TRAIN_SCRIPT="/Workspace/Users/guanyu.chen@databricks.com/image_classification/train_guanyu.py"
    
   torchrun \
     --nnodes=2 \
