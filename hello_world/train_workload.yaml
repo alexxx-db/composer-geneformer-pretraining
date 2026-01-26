@@ -9,7 +9,7 @@ compute:
 max_retries: 0
 command: |-
 
-  TRAIN_SCRIPT="/Workspace/Users/guanyu.chen@databricks.com/image_classification/train_guanyu.py"
+  TRAIN_SCRIPT="/Workspace/Users/guanyu.chen@databricks.com/sgc-cli-test/train_guanyu.py"
    
   torchrun \
     --nnodes=2 \
