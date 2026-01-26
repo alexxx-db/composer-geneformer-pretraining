@@ -22,7 +22,7 @@ code_source:
     # git_commit: 9de28424209f0950c9d3204967e8742a7ac5a148
     repo_path: /Users/guanyu.chen/Documents/Projects/composer_geneformer_pretrain/
 command: |-
-  TRAIN_SCRIPT="./hello_world/train_guanyu.py"
+  TRAIN_SCRIPT="hello_world/train_guanyu.py"
    
   torchrun \
     --nnodes=2 \
