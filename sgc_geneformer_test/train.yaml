@@ -23,8 +23,8 @@ code_source:
     repo_path: /Users/guanyu.chen/Documents/Projects/composer_geneformer_pretrain/
 command: |-
   echo "Current working directory:" 
-  ls pwd
-  cd $HOME/hello_world
+  pwd
+  cd $HOME/composer_geneformer_pretrain/hello_world
   echo ">>> In hello_world folder, starting training"
   TRAIN_SCRIPT="train_guanyu.py"
    
