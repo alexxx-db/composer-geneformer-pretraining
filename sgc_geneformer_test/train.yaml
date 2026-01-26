@@ -18,11 +18,10 @@ max_retries: 0
 code_source:
   type: snapshot
   snapshot:
-    git_branch: sgc_cli_guanyu
-    repo_path: /home/username/repo
+    # git_branch: sgc_cli_guanyu
+    # git_commit: 9de28424209f0950c9d3204967e8742a7ac5a148
+    repo_path: /Users/guanyu.chen/Documents/Projects/composer_geneformer_pretrain/hello_world/
 command: |-
-  cd /Workspace/Users/guanyu.chen@databricks.com/sgc-cli-test/latest_module/
-  echo ">>> In latest_module folder, starting training"
   TRAIN_SCRIPT="./train_guanyu.py"
    
   torchrun \
