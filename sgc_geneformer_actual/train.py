@@ -138,12 +138,23 @@ def main(cfg: DictConfig):
     # Scheduler
     scheduler = build_scheduler(cfg.scheduler)
 
-    #data collator
-    data_collator = DataCollatorForLanguageModeling(
+    #data collator - wrapped to convert input_ids to Long dtype
+    base_collator = DataCollatorForLanguageModeling(
             tokenizer=tokenizer, 
             mlm=True, 
             mlm_probability=mlm_probability
         )
+    
+    def data_collator(features):
+        """Wrapper collator that ensures input_ids are Long dtype before MLM masking."""
+        # Convert input_ids to Long dtype if they are float
+        for feature in features:
+            if 'input_ids' in feature:
+                if isinstance(feature['input_ids'], torch.Tensor):
+                    feature['input_ids'] = feature['input_ids'].long()
+                elif isinstance(feature['input_ids'], np.ndarray):
+                    feature['input_ids'] = feature['input_ids'].astype(np.int64)
+        return base_collator(features)
 
     train_dataloader = DataLoader(streaming_dataset_train,
                             shuffle=False, 
