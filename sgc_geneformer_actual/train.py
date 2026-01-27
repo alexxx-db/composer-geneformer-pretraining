@@ -25,7 +25,7 @@ import geneformer
 from geneformer.pretrainer import GeneformerPreCollator
 
 from composer.models.huggingface import HuggingFaceModel
-from composer.utils import reproducibility
+from composer.utils import reproducibility, dist
 from composer import Trainer
 from composer import Callback, Event, Logger, State
 
@@ -116,6 +116,11 @@ def main(cfg: DictConfig):
     tokenizer = GeneformerPreCollator(token_dictionary=token_dictionary)
     model.train()
     print(model)
+
+    # Initialize distributed training before creating StreamingDataset
+    # This prevents timeout issues when StreamingDataset tries to init distributed
+    dist.initialize_dist(device=cfg.get("device", "gpu"))
+    print(f"Distributed initialized: world_size={dist.get_world_size()}, rank={dist.get_global_rank()}")
 
     #Create streaming dataset - using local Databricks volume path
     print(f"Loading streaming dataset from: {local_streaming_dataset_location}")
