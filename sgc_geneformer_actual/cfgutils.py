@@ -95,9 +95,12 @@ def build_scheduler(cfg):
 
 def build_optimizer(cfg, model):
     if cfg.name == 'decoupled_adamw':
+        # Convert betas to tuple to avoid omegaconf.ListConfig serialization issues during checkpointing
+        betas = tuple(cfg.betas) if cfg.betas else (0.9, 0.999)
         return DecoupledAdamW(model.parameters(),
                               lr=cfg.lr,
-                              betas=cfg.betas,
+                              # betas=cfg.betas,
+                              betas=betas,
                               eps=cfg.eps,
                               weight_decay=cfg.weight_decay)
     else:
