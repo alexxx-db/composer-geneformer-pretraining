@@ -77,9 +77,10 @@ console_log_interval: 1ba
 #Auto resume
 autoresume : True
 
-#Checkpoint to remote object store
+#Checkpoint to local volume (S3 commented out due to credentials issue)
 save_interval: 5ep
 save_num_checkpoints_to_keep: 1 
 save_overwrite: True #overwrite checkpoint if exists
 #save_folder: "dbfs:/databricks/mlflow-tracking/{mlflow_experiment_id}/{mlflow_run_id}/artifacts/"
-save_folder: "s3://srijit-nair-sandbox-bucket/geneformer/pretrain/demo/restart/checkpoints/full"
+#save_folder: "s3://srijit-nair-sandbox-bucket/geneformer/pretrain/demo/restart/checkpoints/full"
+save_folder: "/Volumes/main/guanyu_chen/sgc/checkpoints/"
