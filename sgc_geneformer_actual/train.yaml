@@ -15,12 +15,24 @@ compute:
   gpus: 8
   gpu_type: a10
 max_retries: 0
-
+code_source:
+  type: snapshot
+  snapshot:
+    # git_branch: sgc_cli_guanyu
+    # git_commit: 9de28424209f0950c9d3204967e8742a7ac5a148
+    repo_path: /Users/guanyu.chen/Documents/Projects/composer_geneformer_pretrain/
 command: |-
-  train_path="/Workspace/Users/guanyu.chen@databricks.com/composer_geneformer/"
-  cd $train_path
-  echo ">>> In latest_module folder: $train_path"
+  cd $HOME/composer_geneformer_pretrain/sgc_geneformer_actual
+  echo ">>> In actual training folder, starting training"
   sh commands.sh
   echo ">>> Starting training"
   export MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING=true
   composer train.py parameters.yaml
+# command: |-
+#   train_path="/Workspace/Users/guanyu.chen@databricks.com/composer_geneformer/"
+#   cd $train_path
+#   echo ">>> In latest_module folder: $train_path"
+#   sh commands.sh
+#   echo ">>> Starting training"
+#   export MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING=true
+#   composer train.py parameters.yaml
