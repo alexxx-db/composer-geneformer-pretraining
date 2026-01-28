@@ -53,34 +53,51 @@ seed_val : 42
 run_name : geneformer_pretrain
 working_dir : /pretrain/temp  
 
-# Streaming Dataset
-data_location : remote #local vs remote
-local_data_dir : /Geneformer/data
-data_bucket_name : srijit-nair-sandbox-bucket
-data_bucket_key : geneformer/data
-token_dictionary_filename : token_dictionary.pkl
-streaming_dataset_location : streaming/genecorpus_30M_2048.dataset
+# ============================================
+# Databricks Volume Configuration
+# ============================================
+# Volume path is constructed as: /Volumes/{catalog}/{schema}/{volume_name}
+volume:
+  catalog: main
+  schema: guanyu_chen
+  volume_name: sgc
+
+# Data paths relative to the volume root
+data:
+  # Source dataset (HuggingFace format) - used for MDS preparation
+  source_dataset: geneformer/data/dataset/genecorpus_30M_2048.dataset
+  # Streaming dataset location (MDS format) - will be created if not exists
+  streaming_dataset: geneformer/data/dataset/streaming/genecorpus_30M_2048.dataset
+  # Token dictionary file
+  token_dictionary: geneformer/data/token_dictionary.pkl
+  # Test split ratio for train/test split
+  test_split_ratio: 0.1
+
+# Checkpoint path relative to volume root
+checkpoints:
+  folder: geneformer/checkpoints
+
+# ============================================
+# Training Configuration
+# ============================================
 mlm_probability: 0.15
-# Training 
 train_batch_size: 16
 eval_batch_size: 16
-device_train_microbatch_size : 16
-train_subset_num_batches : 100
-eval_subset_num_batches : 10
-max_duration: 1000ep
-eval_interval: 10ep
+device_train_microbatch_size: 16
+train_subset_num_batches: -1  # -1 means use all batches
+eval_subset_num_batches: -1   # -1 means use all batches
+max_duration: 20ep
+eval_interval: 5ep
+
 # Logging
 progress_bar: false
 log_to_console: true
 console_log_interval: 1ba
 
-#Auto resume
-autoresume : True
+# Auto resume
+autoresume: True
 
-#Checkpoint to local volume (S3 commented out due to credentials issue)
-save_interval: 20ep
+# Checkpoint settings
+save_interval: 5ep
 save_num_checkpoints_to_keep: 3 
-save_overwrite: True #overwrite checkpoint if exists
-#save_folder: "dbfs:/databricks/mlflow-tracking/{mlflow_experiment_id}/{mlflow_run_id}/artifacts/"
-#save_folder: "s3://srijit-nair-sandbox-bucket/geneformer/pretrain/demo/restart/checkpoints/full"
-save_folder: "/Volumes/main/guanyu_chen/sgc/checkpoints/1000eps/"
+save_overwrite: True
