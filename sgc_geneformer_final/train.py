@@ -32,6 +32,95 @@ from omegaconf import OmegaConf as om
 from cfgutils import *
 
 
+# HuggingFace base URL for Genecorpus-30M dataset
+HUGGINGFACE_BASE_URL = "https://huggingface.co/datasets/ctheodoris/Genecorpus-30M/resolve/main"
+
+# Local temp directory for downloads (faster than downloading directly to volume)
+LOCAL_DOWNLOAD_DIR = "/tmp/geneformer_download"
+
+
+def download_to_local_and_copy_to_volume(paths: dict, volume_path: str):
+    """
+    Download dataset to local temp directory first, then copy to volume.
+    This is faster and safer than downloading directly to network-mounted volumes.
+    """
+    import shutil
+    
+    print("=" * 60)
+    print("Downloading dataset from HuggingFace...")
+    print(f"Local temp dir: {LOCAL_DOWNLOAD_DIR}")
+    print(f"Volume path: {volume_path}")
+    print("=" * 60)
+    
+    # Create local download directory
+    os.makedirs(LOCAL_DOWNLOAD_DIR, exist_ok=True)
+    
+    # Download token dictionary
+    token_dict_local = f"{LOCAL_DOWNLOAD_DIR}/token_dictionary.pkl"
+    token_dict_volume = paths['token_dictionary']
+    
+    if not os.path.exists(token_dict_volume):
+        print("\n>>> Downloading token_dictionary.pkl...")
+        cmd = f'curl -L "{HUGGINGFACE_BASE_URL}/token_dictionary.pkl?download=true" -o "{token_dict_local}"'
+        subprocess.run(cmd, shell=True, check=True)
+        
+        # Copy to volume
+        print(f">>> Copying to volume: {token_dict_volume}")
+        os.makedirs(os.path.dirname(token_dict_volume), exist_ok=True)
+        shutil.copy2(token_dict_local, token_dict_volume)
+        print(">>> Token dictionary ready.")
+    else:
+        print(f"\n>>> Token dictionary already exists: {token_dict_volume}")
+    
+    # Download source dataset
+    source_dataset_volume = paths['source_dataset']
+    required_files = ['dataset.arrow', 'dataset_info.json', 'state.json']
+    
+    # Check if source dataset already exists in volume
+    all_exist = os.path.exists(source_dataset_volume) and all(
+        os.path.exists(os.path.join(source_dataset_volume, f)) for f in required_files
+    )
+    
+    if not all_exist:
+        print("\n>>> Downloading source dataset files...")
+        
+        # Create local dataset directory
+        local_dataset_dir = f"{LOCAL_DOWNLOAD_DIR}/genecorpus_30M_2048.dataset"
+        os.makedirs(local_dataset_dir, exist_ok=True)
+        
+        # Download each file
+        dataset_files = [
+            ("genecorpus_30M_2048.dataset/dataset.arrow", "dataset.arrow"),
+            ("genecorpus_30M_2048.dataset/dataset_info.json", "dataset_info.json"),
+            ("genecorpus_30M_2048.dataset/state.json", "state.json"),
+        ]
+        
+        for remote_file, local_file in dataset_files:
+            url = f"{HUGGINGFACE_BASE_URL}/{remote_file}"
+            local_path = f"{local_dataset_dir}/{local_file}"
+            print(f"    Downloading {local_file}...")
+            cmd = f'curl -L "{url}" -o "{local_path}"'
+            subprocess.run(cmd, shell=True, check=True)
+        
+        # Copy entire dataset directory to volume
+        print(f"\n>>> Copying dataset to volume: {source_dataset_volume}")
+        os.makedirs(source_dataset_volume, exist_ok=True)
+        for local_file in required_files:
+            src = f"{local_dataset_dir}/{local_file}"
+            dst = f"{source_dataset_volume}/{local_file}"
+            shutil.copy2(src, dst)
+        print(">>> Source dataset ready.")
+    else:
+        print(f"\n>>> Source dataset already exists: {source_dataset_volume}")
+    
+    # Cleanup local temp files (optional, comment out to keep for debugging)
+    # shutil.rmtree(LOCAL_DOWNLOAD_DIR, ignore_errors=True)
+    
+    print("\n" + "=" * 60)
+    print("Dataset download and copy complete!")
+    print("=" * 60)
+
+
 def build_volume_path(cfg: DictConfig) -> str:
     """Build the Databricks volume path from catalog, schema, and volume_name."""
     volume_cfg = cfg.volume
@@ -64,59 +153,7 @@ def check_streaming_dataset_exists(paths: dict) -> bool:
     return False
 
 
-# HuggingFace base URL for Genecorpus-30M dataset
-HUGGINGFACE_BASE_URL = "https://huggingface.co/datasets/ctheodoris/Genecorpus-30M/resolve/main"
-
-
-def download_token_dictionary(paths: dict):
-    """Download the token dictionary from HuggingFace if not present."""
-    import urllib.request
-    
-    token_dictionary_path = paths['token_dictionary']
-    
-    print("=" * 60)
-    print("Downloading token dictionary from HuggingFace...")
-    print("=" * 60)
-    
-    token_dict_url = f"{HUGGINGFACE_BASE_URL}/token_dictionary.pkl?download=true"
-    os.makedirs(os.path.dirname(token_dictionary_path), exist_ok=True)
-    print(f"Downloading to: {token_dictionary_path}")
-    urllib.request.urlretrieve(token_dict_url, token_dictionary_path)
-    print("Token dictionary downloaded.")
-    print("=" * 60)
-
-
-def download_source_dataset(paths: dict, volume_path: str):
-    """Download the source dataset from HuggingFace if not present."""
-    import urllib.request
-    
-    source_dataset_path = paths['source_dataset']
-    
-    print("=" * 60)
-    print("Downloading source dataset from HuggingFace...")
-    print("=" * 60)
-    
-    print(f"Downloading source dataset to: {source_dataset_path}")
-    os.makedirs(source_dataset_path, exist_ok=True)
-    
-    # Files to download for the dataset
-    dataset_files = [
-        ("genecorpus_30M_2048.dataset/dataset.arrow", "dataset.arrow"),
-        ("genecorpus_30M_2048.dataset/dataset_info.json", "dataset_info.json"),
-        ("genecorpus_30M_2048.dataset/state.json", "state.json"),
-    ]
-    
-    for remote_file, local_file in dataset_files:
-        url = f"{HUGGINGFACE_BASE_URL}/{remote_file}"
-        local_path = os.path.join(source_dataset_path, local_file)
-        print(f"  Downloading {local_file}...")
-        urllib.request.urlretrieve(url, local_path)
-    
-    print("Source dataset downloaded.")
-    print("=" * 60)
-
-
-def prepare_streaming_dataset(cfg: DictConfig, paths: dict, volume_path: str):
+def prepare_streaming_dataset(cfg: DictConfig, paths: dict):
     """Prepare the streaming dataset from the source HuggingFace dataset."""
     from datasets import load_from_disk
     from streaming import MDSWriter
@@ -134,10 +171,12 @@ def prepare_streaming_dataset(cfg: DictConfig, paths: dict, volume_path: str):
     print(f"Streaming dataset: {streaming_dataset_path}")
     print(f"Test split ratio: {test_split_ratio}")
     
-    # Check if source dataset exists, download if not
+    # Source dataset should exist at this point (downloaded earlier in main)
     if not os.path.exists(source_dataset_path):
-        print(f"\nSource dataset not found. Downloading from HuggingFace...")
-        download_source_dataset(paths, volume_path)
+        raise FileNotFoundError(
+            f"Source dataset not found at: {source_dataset_path}\n"
+            f"This should have been downloaded earlier. Please check the logs."
+        )
     
     # Define columns for MDS
     columns = {
@@ -236,10 +275,11 @@ def main(cfg: DictConfig):
         for name, algorithm_cfg in cfg.get('algorithms', {}).items()
     ]
     
-    # Check and download token dictionary if not exists (only on rank 0 before dist init)
-    if not os.path.exists(paths['token_dictionary']):
-        print(f"\nToken dictionary not found. Downloading from HuggingFace...")
-        download_token_dictionary(paths)
+    # Check and download data if not exists (token dictionary + source dataset)
+    # Download to local temp first, then copy to volume for better performance
+    if not os.path.exists(paths['token_dictionary']) or not os.path.exists(paths['source_dataset']):
+        print("\nSome data files are missing. Starting download...")
+        download_to_local_and_copy_to_volume(paths, volume_path)
     
     # Read the token dictionary file
     print(f"\nLoading token dictionary from: {paths['token_dictionary']}")
@@ -268,7 +308,7 @@ def main(cfg: DictConfig):
     # Check if streaming dataset exists, prepare if not (only on rank 0)
     if dist.get_global_rank() == 0:
         if not check_streaming_dataset_exists(paths):
-            prepare_streaming_dataset(cfg, paths, volume_path)
+            prepare_streaming_dataset(cfg, paths)
         else:
             print(f"\nStreaming dataset already exists at: {paths['streaming_dataset']}")
             print("Skipping MDS preparation.")
