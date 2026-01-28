@@ -64,7 +64,59 @@ def check_streaming_dataset_exists(paths: dict) -> bool:
     return False
 
 
-def prepare_streaming_dataset(cfg: DictConfig, paths: dict):
+# HuggingFace base URL for Genecorpus-30M dataset
+HUGGINGFACE_BASE_URL = "https://huggingface.co/datasets/ctheodoris/Genecorpus-30M/resolve/main"
+
+
+def download_token_dictionary(paths: dict):
+    """Download the token dictionary from HuggingFace if not present."""
+    import urllib.request
+    
+    token_dictionary_path = paths['token_dictionary']
+    
+    print("=" * 60)
+    print("Downloading token dictionary from HuggingFace...")
+    print("=" * 60)
+    
+    token_dict_url = f"{HUGGINGFACE_BASE_URL}/token_dictionary.pkl?download=true"
+    os.makedirs(os.path.dirname(token_dictionary_path), exist_ok=True)
+    print(f"Downloading to: {token_dictionary_path}")
+    urllib.request.urlretrieve(token_dict_url, token_dictionary_path)
+    print("Token dictionary downloaded.")
+    print("=" * 60)
+
+
+def download_source_dataset(paths: dict, volume_path: str):
+    """Download the source dataset from HuggingFace if not present."""
+    import urllib.request
+    
+    source_dataset_path = paths['source_dataset']
+    
+    print("=" * 60)
+    print("Downloading source dataset from HuggingFace...")
+    print("=" * 60)
+    
+    print(f"Downloading source dataset to: {source_dataset_path}")
+    os.makedirs(source_dataset_path, exist_ok=True)
+    
+    # Files to download for the dataset
+    dataset_files = [
+        ("genecorpus_30M_2048.dataset/dataset.arrow", "dataset.arrow"),
+        ("genecorpus_30M_2048.dataset/dataset_info.json", "dataset_info.json"),
+        ("genecorpus_30M_2048.dataset/state.json", "state.json"),
+    ]
+    
+    for remote_file, local_file in dataset_files:
+        url = f"{HUGGINGFACE_BASE_URL}/{remote_file}"
+        local_path = os.path.join(source_dataset_path, local_file)
+        print(f"  Downloading {local_file}...")
+        urllib.request.urlretrieve(url, local_path)
+    
+    print("Source dataset downloaded.")
+    print("=" * 60)
+
+
+def prepare_streaming_dataset(cfg: DictConfig, paths: dict, volume_path: str):
     """Prepare the streaming dataset from the source HuggingFace dataset."""
     from datasets import load_from_disk
     from streaming import MDSWriter
@@ -82,12 +134,10 @@ def prepare_streaming_dataset(cfg: DictConfig, paths: dict):
     print(f"Streaming dataset: {streaming_dataset_path}")
     print(f"Test split ratio: {test_split_ratio}")
     
-    # Check if source dataset exists
+    # Check if source dataset exists, download if not
     if not os.path.exists(source_dataset_path):
-        raise FileNotFoundError(
-            f"Source dataset not found at: {source_dataset_path}\n"
-            f"Please ensure the dataset exists in the Databricks volume."
-        )
+        print(f"\nSource dataset not found. Downloading from HuggingFace...")
+        download_source_dataset(paths, volume_path)
     
     # Define columns for MDS
     columns = {
@@ -186,6 +236,11 @@ def main(cfg: DictConfig):
         for name, algorithm_cfg in cfg.get('algorithms', {}).items()
     ]
     
+    # Check and download token dictionary if not exists (only on rank 0 before dist init)
+    if not os.path.exists(paths['token_dictionary']):
+        print(f"\nToken dictionary not found. Downloading from HuggingFace...")
+        download_token_dictionary(paths)
+    
     # Read the token dictionary file
     print(f"\nLoading token dictionary from: {paths['token_dictionary']}")
     with open(paths['token_dictionary'], 'rb') as f:
@@ -213,7 +268,7 @@ def main(cfg: DictConfig):
     # Check if streaming dataset exists, prepare if not (only on rank 0)
     if dist.get_global_rank() == 0:
         if not check_streaming_dataset_exists(paths):
-            prepare_streaming_dataset(cfg, paths)
+            prepare_streaming_dataset(cfg, paths, volume_path)
         else:
             print(f"\nStreaming dataset already exists at: {paths['streaming_dataset']}")
             print("Skipping MDS preparation.")
