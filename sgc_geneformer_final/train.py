@@ -275,13 +275,26 @@ def main(cfg: DictConfig):
         for name, algorithm_cfg in cfg.get('algorithms', {}).items()
     ]
     
-    # Check and download data if not exists (token dictionary + source dataset)
-    # Download to local temp first, then copy to volume for better performance
-    if not os.path.exists(paths['token_dictionary']) or not os.path.exists(paths['source_dataset']):
-        print("\nSome data files are missing. Starting download...")
-        download_to_local_and_copy_to_volume(paths, volume_path)
+    # Initialize distributed training FIRST (before any downloads)
+    # This ensures proper coordination between workers
+    dist.initialize_dist(device=cfg.get("device", "gpu"))
+    print(f"\nDistributed initialized: world_size={dist.get_world_size()}, rank={dist.get_global_rank()}")
     
-    # Read the token dictionary file
+    # Only rank 0 downloads data - other ranks wait
+    if dist.get_global_rank() == 0:
+        # Check and download data if not exists (token dictionary + source dataset)
+        # Download to local temp first, then copy to volume for better performance
+        if not os.path.exists(paths['token_dictionary']) or not os.path.exists(paths['source_dataset']):
+            print("\nSome data files are missing. Starting download...")
+            download_to_local_and_copy_to_volume(paths, volume_path)
+        else:
+            print("\nAll data files exist in volume. Skipping download.")
+    
+    # All ranks wait for rank 0 to finish downloading
+    dist.barrier()
+    print(f"[Rank {dist.get_global_rank()}] Passed download barrier")
+    
+    # Read the token dictionary file (all ranks)
     print(f"\nLoading token dictionary from: {paths['token_dictionary']}")
     with open(paths['token_dictionary'], 'rb') as f:
         token_dictionary = pickle.load(f)
@@ -301,10 +314,6 @@ def main(cfg: DictConfig):
     model.train()
     print(model)
 
-    # Initialize distributed training before creating StreamingDataset
-    dist.initialize_dist(device=cfg.get("device", "gpu"))
-    print(f"\nDistributed initialized: world_size={dist.get_world_size()}, rank={dist.get_global_rank()}")
-
     # Check if streaming dataset exists, prepare if not (only on rank 0)
     if dist.get_global_rank() == 0:
         if not check_streaming_dataset_exists(paths):
@@ -315,6 +324,7 @@ def main(cfg: DictConfig):
     
     # Synchronize all ranks after potential dataset preparation
     dist.barrier()
+    print(f"[Rank {dist.get_global_rank()}] Passed MDS preparation barrier")
 
     # Create streaming dataset
     print(f"\nLoading streaming dataset from: {paths['streaming_dataset']}")
