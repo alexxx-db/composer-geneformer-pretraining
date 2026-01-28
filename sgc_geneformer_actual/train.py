@@ -120,12 +120,37 @@ def main(cfg: DictConfig):
     # Initialize distributed training before creating StreamingDataset
     # This prevents timeout issues when StreamingDataset tries to init distributed
     dist.initialize_dist(device=cfg.get("device", "gpu"))
-    print(f"Distributed initialized: world_size={dist.get_world_size()}, rank={dist.get_global_rank()}")
+    world_size = dist.get_world_size()
+    global_rank = dist.get_global_rank()
+    print(f"Distributed initialized: world_size={world_size}, rank={global_rank}")
+    
+    # Add a barrier here to ensure all ranks are synchronized before StreamingDataset
+    import torch.distributed as torch_dist
+    if torch_dist.is_initialized():
+        torch_dist.barrier()
+        print(f"Rank {global_rank}: Passed initial barrier, proceeding to StreamingDataset")
 
     #Create streaming dataset - using local Databricks volume path
     print(f"Loading streaming dataset from: {local_streaming_dataset_location}")
-    streaming_dataset_train = StreamingDataset(local=f"{local_streaming_dataset_location}/train" ,batch_size=train_batch_size)
-    streaming_dataset_eval = StreamingDataset(local=f"{local_streaming_dataset_location}/test" ,batch_size=eval_batch_size)        
+    
+    # For multi-node training, calculate num_canonical_nodes (number of physical nodes)
+    # Assuming 8 GPUs per node for H100 clusters
+    gpus_per_node = 8
+    num_canonical_nodes = max(1, world_size // gpus_per_node)
+    print(f"Using num_canonical_nodes={num_canonical_nodes} for StreamingDataset")
+    
+    streaming_dataset_train = StreamingDataset(
+        local=f"{local_streaming_dataset_location}/train",
+        batch_size=train_batch_size,
+        num_canonical_nodes=num_canonical_nodes,
+        shuffle=True,  # Enable shuffling for training
+    )
+    streaming_dataset_eval = StreamingDataset(
+        local=f"{local_streaming_dataset_location}/test",
+        batch_size=eval_batch_size,
+        num_canonical_nodes=num_canonical_nodes,
+        shuffle=False,  # No shuffling for eval
+    )        
     # Commented out S3 remote option:
     # if data_local:
     #     streaming_dataset_train = StreamingDataset(local=f"{local_streaming_dataset_location}/train" ,batch_size=train_batch_size)
