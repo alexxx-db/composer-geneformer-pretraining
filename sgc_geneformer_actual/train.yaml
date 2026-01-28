@@ -9,7 +9,14 @@
 experiment_name: geneformer-guanyu
 environment:
   env_variables:
+    # NCCL settings for multi-node H100 training
     NCCL_DEBUG: "INFO"
+    NCCL_SOCKET_IFNAME: "eth0"           # Use the primary network interface
+    NCCL_IB_DISABLE: "1"                 # Disable InfiniBand if not available
+    NCCL_NET_GDR_LEVEL: "0"              # Disable GPU Direct RDMA if causing issues
+    NCCL_P2P_DISABLE: "0"                # Keep P2P enabled within node
+    NCCL_TIMEOUT: "1800"                 # 30 min timeout for large barrier ops
+    TORCH_NCCL_BLOCKING_WAIT: "1"        # Use blocking wait for better error reporting
   dependencies: dependencies.yaml
 compute:
   gpus: 16
