@@ -69,7 +69,7 @@ data:
   # Streaming dataset location (MDS format) - will be created if not exists
   streaming_dataset: geneformer/data/dataset/streaming/genecorpus_30M_2048.dataset
   # Token dictionary file
-  token_dictionary: geneformer/data/token_dictionary.pkl
+  token_dictionary: geneformer/token_dictionary.pkl
   # Test split ratio for train/test split
   test_split_ratio: 0.1
 
