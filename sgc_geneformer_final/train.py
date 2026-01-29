@@ -203,12 +203,15 @@ def prepare_streaming_dataset(cfg: DictConfig, paths: dict):
     
     # Load source dataset
     print(f"\nLoading source dataset from: {source_dataset_path}")
+    print("(This may take a few minutes for large datasets...)")
     dataset = load_from_disk(source_dataset_path)
     print(f"Dataset loaded: {dataset}")
+    print(f"Total samples: {len(dataset)}")
     
     # Split dataset into train and test sets
     print(f"\nSplitting dataset with test_size={test_split_ratio}")
-    train_test_split = dataset.train_test_split(test_size=test_split_ratio)
+    print("(This may take a few minutes...)")
+    train_test_split = dataset.train_test_split(test_size=test_split_ratio, seed=42)
     train_dataset = train_test_split["train"]
     test_dataset = train_test_split["test"]
     
@@ -219,21 +222,23 @@ def prepare_streaming_dataset(cfg: DictConfig, paths: dict):
     os.makedirs(paths['train_dir'], exist_ok=True)
     os.makedirs(paths['test_dir'], exist_ok=True)
     
-    # Prepare training dataset
+    # Prepare training dataset - iterate directly (much faster than to_pandas)
     print("\nPreparing training dataset...")
-    train_dataset_list = train_dataset.to_pandas().to_dict('records')
+    print("(Writing MDS shards - this will take a while for 30M samples...)")
     with MDSWriter(out=paths['train_dir'], columns=columns, compression='zstd') as out:
-        for x in tqdm(train_dataset_list, total=len(train_dataset_list), desc="Writing train"):
+        for i, x in enumerate(tqdm(train_dataset, total=len(train_dataset), desc="Writing train")):
             out.write({
                 "input_ids": x["input_ids"],
                 "length": x["length"]
             })
+            # Print progress every 1M samples
+            if (i + 1) % 1000000 == 0:
+                print(f"  Processed {i + 1:,} train samples...")
     
-    # Prepare test dataset
+    # Prepare test dataset - iterate directly (much faster than to_pandas)
     print("\nPreparing test dataset...")
-    test_dataset_list = test_dataset.to_pandas().to_dict('records')
     with MDSWriter(out=paths['test_dir'], columns=columns, compression='zstd') as out:
-        for x in tqdm(test_dataset_list, total=len(test_dataset_list), desc="Writing test"):
+        for i, x in enumerate(tqdm(test_dataset, total=len(test_dataset), desc="Writing test")):
             out.write({
                 "input_ids": x["input_ids"],
                 "length": x["length"]

@@ -125,10 +125,10 @@ def main(cfg: DictConfig):
     print(f"Distributed initialized: world_size={world_size}, rank={global_rank}")
     
     # Add a barrier here to ensure all ranks are synchronized before StreamingDataset
-    import torch.distributed as torch_dist
-    if torch_dist.is_initialized():
-        torch_dist.barrier()
-        print(f"Rank {global_rank}: Passed initial barrier, proceeding to StreamingDataset")
+    # import torch.distributed as torch_dist
+    # if torch_dist.is_initialized():
+    #     torch_dist.barrier()
+    #     print(f"Rank {global_rank}: Passed initial barrier, proceeding to StreamingDataset")
 
     #Create streaming dataset - using local Databricks volume path
     print(f"Loading streaming dataset from: {local_streaming_dataset_location}")
