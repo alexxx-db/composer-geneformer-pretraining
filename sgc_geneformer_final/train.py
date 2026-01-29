@@ -140,17 +140,34 @@ def get_data_paths(cfg: DictConfig, volume_path: str) -> dict:
 
 
 def check_streaming_dataset_exists(paths: dict) -> bool:
-    """Check if the streaming dataset (train and test) already exists."""
-    train_exists = os.path.exists(paths['train_dir']) and os.path.isdir(paths['train_dir'])
-    test_exists = os.path.exists(paths['test_dir']) and os.path.isdir(paths['test_dir'])
+    """Check if the streaming dataset (train and test) already exists with valid data."""
+    train_dir = paths['train_dir']
+    test_dir = paths['test_dir']
     
-    if train_exists and test_exists:
-        # Check if directories have actual data (index.json is a good indicator)
-        train_has_data = os.path.exists(os.path.join(paths['train_dir'], 'index.json'))
-        test_has_data = os.path.exists(os.path.join(paths['test_dir'], 'index.json'))
-        return train_has_data and test_has_data
+    train_index = os.path.join(train_dir, 'index.json')
+    test_index = os.path.join(test_dir, 'index.json')
     
-    return False
+    train_has_data = os.path.exists(train_index)
+    test_has_data = os.path.exists(test_index)
+    
+    print(f"  Checking streaming dataset:")
+    print(f"    Train dir: {train_dir}")
+    print(f"    Train index.json exists: {train_has_data}")
+    print(f"    Test dir: {test_dir}")
+    print(f"    Test index.json exists: {test_has_data}")
+    
+    # If directories exist but are empty, clean them up
+    if os.path.exists(train_dir) and not train_has_data:
+        print(f"    WARNING: Train dir exists but is empty/invalid. Will recreate.")
+        import shutil
+        shutil.rmtree(train_dir, ignore_errors=True)
+    
+    if os.path.exists(test_dir) and not test_has_data:
+        print(f"    WARNING: Test dir exists but is empty/invalid. Will recreate.")
+        import shutil
+        shutil.rmtree(test_dir, ignore_errors=True)
+    
+    return train_has_data and test_has_data
 
 
 def prepare_streaming_dataset(cfg: DictConfig, paths: dict):
@@ -222,8 +239,24 @@ def prepare_streaming_dataset(cfg: DictConfig, paths: dict):
                 "length": x["length"]
             })
     
+    # Verify files were created
+    print("\n>>> Verifying MDS files were created...")
+    train_index = os.path.join(paths['train_dir'], 'index.json')
+    test_index = os.path.join(paths['test_dir'], 'index.json')
+    
+    train_files = os.listdir(paths['train_dir']) if os.path.exists(paths['train_dir']) else []
+    test_files = os.listdir(paths['test_dir']) if os.path.exists(paths['test_dir']) else []
+    
+    print(f"    Train dir contents ({len(train_files)} files): {train_files[:5]}...")
+    print(f"    Test dir contents ({len(test_files)} files): {test_files[:5]}...")
+    
+    if not os.path.exists(train_index):
+        raise RuntimeError(f"ERROR: Train index.json was not created at {train_index}")
+    if not os.path.exists(test_index):
+        raise RuntimeError(f"ERROR: Test index.json was not created at {test_index}")
+    
     print("\n" + "=" * 60)
-    print("Streaming dataset preparation complete!")
+    print("Streaming dataset preparation complete and verified!")
     print("=" * 60)
 
 
