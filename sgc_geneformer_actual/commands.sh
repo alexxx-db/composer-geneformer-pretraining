@@ -1,5 +1,5 @@
 echo ">>> Installing Geneformer"
-cd /composer_geneformer_pretrain
+# cd /composer_geneformer_pretrain
 sh geneformer_prep.sh 
 
 echo ">>> Installing dependencies"
