@@ -32,95 +32,6 @@ from omegaconf import OmegaConf as om
 from cfgutils import *
 
 
-# HuggingFace base URL for Genecorpus-30M dataset
-HUGGINGFACE_BASE_URL = "https://huggingface.co/datasets/ctheodoris/Genecorpus-30M/resolve/main"
-
-# Local temp directory for downloads (faster than downloading directly to volume)
-LOCAL_DOWNLOAD_DIR = "/tmp/geneformer_download"
-
-
-def download_to_local_and_copy_to_volume(paths: dict, volume_path: str):
-    """
-    Download dataset to local temp directory first, then copy to volume.
-    This is faster and safer than downloading directly to network-mounted volumes.
-    """
-    import shutil
-    
-    print("=" * 60)
-    print("Downloading dataset from HuggingFace...")
-    print(f"Local temp dir: {LOCAL_DOWNLOAD_DIR}")
-    print(f"Volume path: {volume_path}")
-    print("=" * 60)
-    
-    # Create local download directory
-    os.makedirs(LOCAL_DOWNLOAD_DIR, exist_ok=True)
-    
-    # Download token dictionary
-    token_dict_local = f"{LOCAL_DOWNLOAD_DIR}/token_dictionary.pkl"
-    token_dict_volume = paths['token_dictionary']
-    
-    if not os.path.exists(token_dict_volume):
-        print("\n>>> Downloading token_dictionary.pkl...")
-        cmd = f'curl -L "{HUGGINGFACE_BASE_URL}/token_dictionary.pkl?download=true" -o "{token_dict_local}"'
-        subprocess.run(cmd, shell=True, check=True)
-        
-        # Copy to volume
-        print(f">>> Copying to volume: {token_dict_volume}")
-        os.makedirs(os.path.dirname(token_dict_volume), exist_ok=True)
-        shutil.copy2(token_dict_local, token_dict_volume)
-        print(">>> Token dictionary ready.")
-    else:
-        print(f"\n>>> Token dictionary already exists: {token_dict_volume}")
-    
-    # Download source dataset
-    source_dataset_volume = paths['source_dataset']
-    required_files = ['dataset.arrow', 'dataset_info.json', 'state.json']
-    
-    # Check if source dataset already exists in volume
-    all_exist = os.path.exists(source_dataset_volume) and all(
-        os.path.exists(os.path.join(source_dataset_volume, f)) for f in required_files
-    )
-    
-    if not all_exist:
-        print("\n>>> Downloading source dataset files...")
-        
-        # Create local dataset directory
-        local_dataset_dir = f"{LOCAL_DOWNLOAD_DIR}/genecorpus_30M_2048.dataset"
-        os.makedirs(local_dataset_dir, exist_ok=True)
-        
-        # Download each file
-        dataset_files = [
-            ("genecorpus_30M_2048.dataset/dataset.arrow", "dataset.arrow"),
-            ("genecorpus_30M_2048.dataset/dataset_info.json", "dataset_info.json"),
-            ("genecorpus_30M_2048.dataset/state.json", "state.json"),
-        ]
-        
-        for remote_file, local_file in dataset_files:
-            url = f"{HUGGINGFACE_BASE_URL}/{remote_file}"
-            local_path = f"{local_dataset_dir}/{local_file}"
-            print(f"    Downloading {local_file}...")
-            cmd = f'curl -L "{url}" -o "{local_path}"'
-            subprocess.run(cmd, shell=True, check=True)
-        
-        # Copy entire dataset directory to volume
-        print(f"\n>>> Copying dataset to volume: {source_dataset_volume}")
-        os.makedirs(source_dataset_volume, exist_ok=True)
-        for local_file in required_files:
-            src = f"{local_dataset_dir}/{local_file}"
-            dst = f"{source_dataset_volume}/{local_file}"
-            shutil.copy2(src, dst)
-        print(">>> Source dataset ready.")
-    else:
-        print(f"\n>>> Source dataset already exists: {source_dataset_volume}")
-    
-    # Cleanup local temp files (optional, comment out to keep for debugging)
-    # shutil.rmtree(LOCAL_DOWNLOAD_DIR, ignore_errors=True)
-    
-    print("\n" + "=" * 60)
-    print("Dataset download and copy complete!")
-    print("=" * 60)
-
-
 def build_volume_path(cfg: DictConfig) -> str:
     """Build the Databricks volume path from catalog, schema, and volume_name."""
     volume_cfg = cfg.volume
@@ -139,130 +50,41 @@ def get_data_paths(cfg: DictConfig, volume_path: str) -> dict:
     }
 
 
-def check_streaming_dataset_exists(paths: dict) -> bool:
-    """Check if the streaming dataset (train and test) already exists with valid data."""
-    train_dir = paths['train_dir']
-    test_dir = paths['test_dir']
+def verify_data_exists(paths: dict):
+    """
+    Verify that all required data exists.
+    Raises FileNotFoundError with instructions if data is missing.
+    """
+    errors = []
     
-    train_index = os.path.join(train_dir, 'index.json')
-    test_index = os.path.join(test_dir, 'index.json')
+    # Check token dictionary
+    if not os.path.exists(paths['token_dictionary']):
+        errors.append(f"Token dictionary not found: {paths['token_dictionary']}")
     
-    train_has_data = os.path.exists(train_index)
-    test_has_data = os.path.exists(test_index)
-    
-    print(f"  Checking streaming dataset:")
-    print(f"    Train dir: {train_dir}")
-    print(f"    Train index.json exists: {train_has_data}")
-    print(f"    Test dir: {test_dir}")
-    print(f"    Test index.json exists: {test_has_data}")
-    
-    # If directories exist but are empty, clean them up
-    if os.path.exists(train_dir) and not train_has_data:
-        print(f"    WARNING: Train dir exists but is empty/invalid. Will recreate.")
-        import shutil
-        shutil.rmtree(train_dir, ignore_errors=True)
-    
-    if os.path.exists(test_dir) and not test_has_data:
-        print(f"    WARNING: Test dir exists but is empty/invalid. Will recreate.")
-        import shutil
-        shutil.rmtree(test_dir, ignore_errors=True)
-    
-    return train_has_data and test_has_data
-
-
-def prepare_streaming_dataset(cfg: DictConfig, paths: dict):
-    """Prepare the streaming dataset from the source HuggingFace dataset."""
-    from datasets import load_from_disk
-    from streaming import MDSWriter
-    from tqdm import tqdm
-    
-    print("=" * 60)
-    print("Streaming dataset not found. Preparing MDS dataset...")
-    print("=" * 60)
-    
-    source_dataset_path = paths['source_dataset']
-    streaming_dataset_path = paths['streaming_dataset']
-    test_split_ratio = cfg.data.get('test_split_ratio', 0.1)
-    
-    print(f"Source dataset: {source_dataset_path}")
-    print(f"Streaming dataset: {streaming_dataset_path}")
-    print(f"Test split ratio: {test_split_ratio}")
-    
-    # Source dataset should exist at this point (downloaded earlier in main)
-    if not os.path.exists(source_dataset_path):
-        raise FileNotFoundError(
-            f"Source dataset not found at: {source_dataset_path}\n"
-            f"This should have been downloaded earlier. Please check the logs."
-        )
-    
-    # Define columns for MDS
-    columns = {
-        'input_ids': "ndarray",
-        'length': 'int'
-    }
-    
-    # Load source dataset
-    print(f"\nLoading source dataset from: {source_dataset_path}")
-    print("(This may take a few minutes for large datasets...)")
-    dataset = load_from_disk(source_dataset_path)
-    print(f"Dataset loaded: {dataset}")
-    print(f"Total samples: {len(dataset)}")
-    
-    # Split dataset into train and test sets
-    print(f"\nSplitting dataset with test_size={test_split_ratio}")
-    print("(This may take a few minutes...)")
-    train_test_split = dataset.train_test_split(test_size=test_split_ratio, seed=42)
-    train_dataset = train_test_split["train"]
-    test_dataset = train_test_split["test"]
-    
-    print(f"Train samples: {len(train_dataset)}")
-    print(f"Test samples: {len(test_dataset)}")
-    
-    # Create output directories
-    os.makedirs(paths['train_dir'], exist_ok=True)
-    os.makedirs(paths['test_dir'], exist_ok=True)
-    
-    # Prepare training dataset - iterate directly (much faster than to_pandas)
-    print("\nPreparing training dataset...")
-    print("(Writing MDS shards - this will take a while for 30M samples...)")
-    with MDSWriter(out=paths['train_dir'], columns=columns, compression='zstd') as out:
-        for i, x in enumerate(tqdm(train_dataset, total=len(train_dataset), desc="Writing train")):
-            out.write({
-                "input_ids": x["input_ids"],
-                "length": x["length"]
-            })
-            # Print progress every 1M samples
-            if (i + 1) % 1000000 == 0:
-                print(f"  Processed {i + 1:,} train samples...")
-    
-    # Prepare test dataset - iterate directly (much faster than to_pandas)
-    print("\nPreparing test dataset...")
-    with MDSWriter(out=paths['test_dir'], columns=columns, compression='zstd') as out:
-        for i, x in enumerate(tqdm(test_dataset, total=len(test_dataset), desc="Writing test")):
-            out.write({
-                "input_ids": x["input_ids"],
-                "length": x["length"]
-            })
-    
-    # Verify files were created
-    print("\n>>> Verifying MDS files were created...")
+    # Check train MDS directory and index
     train_index = os.path.join(paths['train_dir'], 'index.json')
-    test_index = os.path.join(paths['test_dir'], 'index.json')
-    
-    train_files = os.listdir(paths['train_dir']) if os.path.exists(paths['train_dir']) else []
-    test_files = os.listdir(paths['test_dir']) if os.path.exists(paths['test_dir']) else []
-    
-    print(f"    Train dir contents ({len(train_files)} files): {train_files[:5]}...")
-    print(f"    Test dir contents ({len(test_files)} files): {test_files[:5]}...")
-    
     if not os.path.exists(train_index):
-        raise RuntimeError(f"ERROR: Train index.json was not created at {train_index}")
-    if not os.path.exists(test_index):
-        raise RuntimeError(f"ERROR: Test index.json was not created at {test_index}")
+        errors.append(f"Train MDS dataset not found: {paths['train_dir']}")
     
-    print("\n" + "=" * 60)
-    print("Streaming dataset preparation complete and verified!")
-    print("=" * 60)
+    # Check test MDS directory and index
+    test_index = os.path.join(paths['test_dir'], 'index.json')
+    if not os.path.exists(test_index):
+        errors.append(f"Test MDS dataset not found: {paths['test_dir']}")
+    
+    if errors:
+        error_list = "\n".join([f"  - {e}" for e in errors])
+        raise FileNotFoundError(
+            f"\n{'='*60}\n"
+            f"DATA NOT FOUND\n"
+            f"{'='*60}\n"
+            f"The following required data is missing:\n{error_list}\n\n"
+            f"Please run data_preparation.py notebook first to:\n"
+            f"  1. Download the dataset from HuggingFace\n"
+            f"  2. Download the token dictionary\n"
+            f"  3. Convert to MDS format\n\n"
+            f"Run the notebook with a CPU cluster before starting GPU training.\n"
+            f"{'='*60}"
+        )
 
 
 def main(cfg: DictConfig):
@@ -313,26 +135,7 @@ def main(cfg: DictConfig):
         for name, algorithm_cfg in cfg.get('algorithms', {}).items()
     ]
     
-    # Initialize distributed training FIRST (before any downloads)
-    # This ensures proper coordination between workers
-    dist.initialize_dist(device=cfg.get("device", "gpu"))
-    print(f"\nDistributed initialized: world_size={dist.get_world_size()}, rank={dist.get_global_rank()}")
-    
-    # Only rank 0 downloads data - other ranks wait
-    if dist.get_global_rank() == 0:
-        # Check and download data if not exists (token dictionary + source dataset)
-        # Download to local temp first, then copy to volume for better performance
-        if not os.path.exists(paths['token_dictionary']) or not os.path.exists(paths['source_dataset']):
-            print("\nSome data files are missing. Starting download...")
-            download_to_local_and_copy_to_volume(paths, volume_path)
-        else:
-            print("\nAll data files exist in volume. Skipping download.")
-    
-    # All ranks wait for rank 0 to finish downloading
-    dist.barrier()
-    print(f"[Rank {dist.get_global_rank()}] Passed download barrier")
-    
-    # Read the token dictionary file (all ranks)
+    # Read the token dictionary file
     print(f"\nLoading token dictionary from: {paths['token_dictionary']}")
     with open(paths['token_dictionary'], 'rb') as f:
         token_dictionary = pickle.load(f)
@@ -352,17 +155,17 @@ def main(cfg: DictConfig):
     model.train()
     print(model)
 
-    # Check if streaming dataset exists, prepare if not (only on rank 0)
+    # Initialize distributed training before creating StreamingDataset
+    dist.initialize_dist(device=cfg.get("device", "gpu"))
+    print(f"\nDistributed initialized: world_size={dist.get_world_size()}, rank={dist.get_global_rank()}")
+
+    # Verify all required data exists (only on rank 0, then sync)
     if dist.get_global_rank() == 0:
-        if not check_streaming_dataset_exists(paths):
-            prepare_streaming_dataset(cfg, paths)
-        else:
-            print(f"\nStreaming dataset already exists at: {paths['streaming_dataset']}")
-            print("Skipping MDS preparation.")
+        verify_data_exists(paths)
+        print(f"\n✅ All data verified at: {paths['streaming_dataset']}")
     
-    # Synchronize all ranks after potential dataset preparation
+    # Synchronize all ranks
     dist.barrier()
-    print(f"[Rank {dist.get_global_rank()}] Passed MDS preparation barrier")
 
     # Create streaming dataset
     print(f"\nLoading streaming dataset from: {paths['streaming_dataset']}")

@@ -1,12 +1,31 @@
 # Geneformer Training - Final Version
 
-This is the final version of the Geneformer pretraining code with configurable Databricks volume paths and automatic MDS dataset preparation.
+This is the final version of the Geneformer pretraining code with configurable Databricks volume paths.
 
-## Features
+## Two-Step Workflow
 
-- **Configurable Volume Paths**: Set catalog, schema, and volume_name in `parameters.yaml`
-- **Automatic MDS Preparation**: If train/test streaming datasets don't exist, they are automatically prepared from the source HuggingFace dataset
-- **Volume-based Checkpoints**: Checkpoints are saved to the configured Databricks volume
+### Step 1: Data Preparation (CPU Cluster)
+
+Run `data_preparation.py` as a Databricks notebook with a **CPU cluster** to:
+1. Download the Genecorpus-30M dataset from HuggingFace (~15GB)
+2. Download the token dictionary
+3. Convert to MDS (Mosaic Data Shard) format for streaming
+
+```
+📓 data_preparation.py → Run on CPU cluster (takes 30-60 mins)
+```
+
+### Step 2: Training (GPU Cluster)
+
+After data preparation, run training with a **GPU cluster**:
+
+```bash
+composer train.py parameters.yaml
+```
+
+```
+🚀 train.py → Run on GPU cluster with SGC CLI
+```
 
 ## Configuration
 
@@ -19,22 +38,15 @@ volume:
   volume_name: sgc        # Databricks volume name
 ```
 
-This constructs the volume path: `/Volumes/{catalog}/{schema}/{volume_name}`
+Volume path: `/Volumes/{catalog}/{schema}/{volume_name}`
 
 ### Data Paths (relative to volume root)
 
 ```yaml
 data:
-  # Source dataset (HuggingFace format) - used for MDS preparation
   source_dataset: geneformer/data/dataset/genecorpus_30M_2048.dataset
-  
-  # Streaming dataset location (MDS format) - will be created if not exists
   streaming_dataset: geneformer/data/dataset/streaming/genecorpus_30M_2048.dataset
-  
-  # Token dictionary file
-  token_dictionary: geneformer/data/token_dictionary.pkl
-  
-  # Test split ratio for train/test split
+  token_dictionary: geneformer/token_dictionary.pkl
   test_split_ratio: 0.1
 ```
 
@@ -45,26 +57,43 @@ checkpoints:
   folder: geneformer/checkpoints
 ```
 
-## Usage
-
-1. Update `parameters.yaml` with your Databricks volume configuration
-2. Ensure the source dataset and token dictionary exist in the volume
-3. Run training:
-
-```bash
-composer train.py parameters.yaml
-```
-
-The script will:
-1. Check if streaming dataset (train/test) exists
-2. If not, prepare it from the source HuggingFace dataset
-3. Train the model and save checkpoints to the volume
-
 ## Files
 
-- `train.py` - Main training script
-- `cfgutils.py` - Configuration utilities (optimizer, scheduler, callbacks, etc.)
-- `parameters.yaml` - Training parameters and volume configuration
-- `train.yaml` - SGC CLI job configuration
-- `dependencies.yaml` - Python dependencies
-- `commands.sh` - Setup commands
+| File | Description |
+|------|-------------|
+| `data_preparation.py` | Databricks notebook for data download & MDS conversion (run first) |
+| `train.py` | Main training script |
+| `cfgutils.py` | Configuration utilities |
+| `parameters.yaml` | Training parameters and volume configuration |
+| `train.yaml` | SGC CLI job configuration |
+| `dependencies.yaml` | Python dependencies |
+| `commands.sh` | Setup commands |
+
+## Quick Start
+
+1. **Update Configuration**
+   - Edit `data_preparation.py` - update CATALOG, SCHEMA, VOLUME_NAME
+   - Edit `parameters.yaml` - update volume section to match
+
+2. **Run Data Preparation**
+   - Import `data_preparation.py` as a Databricks notebook
+   - Attach a CPU cluster
+   - Run all cells (takes 30-60 mins)
+
+3. **Run Training**
+   - Use SGC CLI: `sgcli train submit -f train.yaml`
+   - Or run directly: `composer train.py parameters.yaml`
+
+## Data Flow
+
+```
+HuggingFace Dataset
+        ↓
+  data_preparation.py (CPU)
+        ↓
+  MDS Format in Volume
+        ↓
+    train.py (GPU)
+        ↓
+  Checkpoints in Volume
+```

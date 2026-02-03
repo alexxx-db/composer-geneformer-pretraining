@@ -79,7 +79,7 @@ autoresume : True
 
 #Checkpoint to local volume (S3 commented out due to credentials issue)
 save_interval: 20ep
-save_num_checkpoints_to_keep: 500 
+save_num_checkpoints_to_keep: 500
 save_overwrite: True #overwrite checkpoint if exists
 #save_folder: "dbfs:/databricks/mlflow-tracking/{mlflow_experiment_id}/{mlflow_run_id}/artifacts/"
 #save_folder: "s3://srijit-nair-sandbox-bucket/geneformer/pretrain/demo/restart/checkpoints/full"
