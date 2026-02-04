@@ -29,7 +29,7 @@ code_source:
   type: snapshot
   snapshot:
     git_branch: sgc_cli_guanyu
-    git_commit: 9de28424209f0950c9d3204967e8742a7ac5a148
+    git_commit: 9be9fc7b1d64aa131cdbbdca89f12834b7b403a1
     repo_path: /Users/guanyu.chen/Documents/Projects/composer_geneformer_pretrain/
 command: |-
   cd $HOME/composer_geneformer_pretrain/sgc_geneformer_actual
