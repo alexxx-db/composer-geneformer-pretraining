@@ -67,7 +67,7 @@ eval_batch_size: 16
 device_train_microbatch_size : 16
 train_subset_num_batches : 100
 eval_subset_num_batches : 10
-max_duration: 10050ep
+max_duration: 10060ep
 eval_interval: 10ep
 # Logging
 progress_bar: false
