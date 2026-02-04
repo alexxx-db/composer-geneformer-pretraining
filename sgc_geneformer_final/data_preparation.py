@@ -266,7 +266,7 @@ download_source_dataset()
 # MAGIC 
 # MAGIC Convert the HuggingFace dataset to MDS (Mosaic Data Shard) format for efficient streaming during training.
 # MAGIC 
-# MAGIC **⚠️ This may take 30-60 minutes for 30M samples.**
+# MAGIC Uses Spark's `dataframe_to_mds` for parallel conversion - **typically ~9 minutes for 30M samples!**
 
 # COMMAND ----------
 
@@ -275,37 +275,127 @@ download_source_dataset()
 
 # COMMAND ----------
 
-def write_mds_fast(dataset, output_path: str, name: str = ""):
+def get_optimal_partitions():
     """
-    Write dataset to MDS format using pandas conversion for speed.
-    This loads all data to memory first, then iterates fast.
+    Auto-detect optimal number of partitions based on Spark cluster configuration.
+    Uses 2-4x the number of executor cores for good parallelism.
     """
-    from streaming import MDSWriter
-    from tqdm import tqdm
-    import numpy as np
-    
-    columns = {'input_ids': "ndarray", 'length': 'int'}
-    
-    # Convert to pandas then to list of dicts - MUCH faster iteration than HF dataset
-    print(f"  Converting {len(dataset):,} samples to pandas (this loads to memory)...")
-    dataset_list = dataset.to_pandas().to_dict('records')
-    print(f"  Converted! Now writing MDS...")
-    
-    with MDSWriter(out=output_path, columns=columns, compression='zstd') as out:
-        for x in tqdm(dataset_list, total=len(dataset_list), desc=name):
-            # input_ids is already numpy array from pandas conversion
-            out.write({"input_ids": x["input_ids"], "length": x["length"]})
+    try:
+        # Get Spark configuration
+        sc = spark.sparkContext
+        
+        # Calculate total cores and optimal partitions (2-4x cores is usually good)
+        total_cores = int(sc.defaultParallelism())
+        optimal_partitions = total_cores * 2  # 2x cores for good parallelism
+        
+        # Clamp to reasonable range
+        optimal_partitions = max(8, min(optimal_partitions, 512))
+        
+        print(f"  Detected: {total_cores} total cores")
+        print(f"  Using {optimal_partitions} partitions (2x cores)")
+        
+        return optimal_partitions
+    except Exception as e:
+        print(f"  Could not auto-detect cores ({e}), using default 32 partitions")
+        return 32
 
 
-def prepare_mds_dataset(force_recreate: bool = False):
+def write_mds_spark(dataset, output_path: str, name: str = "", num_partitions: int = None):
     """
-    Convert HuggingFace dataset to MDS format.
-    Uses pandas conversion for fast iteration (loads data to memory).
+    Write dataset to MDS format using Spark's dataframe_to_mds for parallel processing.
+    Uses Parquet as intermediate format for optimal Spark performance.
+    
+    Pipeline: HuggingFace Dataset → Parquet → Spark DataFrame → MDS
+    
+    Args:
+        dataset: HuggingFace dataset to convert
+        output_path: Output path for MDS files
+        name: Name for logging
+        num_partitions: Number of partitions (auto-detected if None)
+    """
+    from streaming.base.converters import dataframe_to_mds
+    from pyspark.sql.functions import col
+    from pyspark.sql.types import LongType
+    import tempfile
+    
+    # Auto-detect optimal partitions if not specified
+    if num_partitions is None:
+        num_partitions = get_optimal_partitions()
+    
+    # Step 1: Convert HuggingFace dataset to Parquet using PyArrow directly (fastest)
+    # Use local disk for temp files (faster than volume - local NVMe SSD)
+    parquet_path = f"/local_disk0/temp_parquet_{name.lower()}"
+    print(f"  Step 1: Converting {len(dataset):,} samples to Parquet (PyArrow direct)...")
+    
+    # Clean temp parquet directory
+    if os.path.exists(parquet_path):
+        shutil.rmtree(parquet_path)
+    os.makedirs(parquet_path, exist_ok=True)
+    
+    # Use PyArrow directly - HF datasets are Arrow-backed, so this is fast!
+    import pyarrow.parquet as pq
+    
+    # Access the underlying Arrow table directly (no conversion needed)
+    arrow_table = dataset.data.table
+    print(f"  Arrow table: {arrow_table.num_rows:,} rows, {arrow_table.nbytes / 1e9:.2f} GB")
+    
+    # Write to Parquet using PyArrow (much faster than HF's to_parquet)
+    parquet_file = f"{parquet_path}/data.parquet"
+    pq.write_table(arrow_table, parquet_file, compression='snappy')
+    print(f"  Parquet saved to: {parquet_file}")
+    
+    # Step 2: Load Parquet into Spark DataFrame (very fast!)
+    print(f"  Step 2: Loading Parquet into Spark DataFrame...")
+    spark_df = spark.read.parquet(parquet_path)
+    row_count = spark_df.count()
+    print(f"  Loaded {row_count:,} rows")
+    
+    # Cast length to LongType to match expected 'int64'
+    spark_df = spark_df.withColumn("length", col("length").cast(LongType()))
+    
+    # Repartition for parallel writes
+    spark_df = spark_df.repartition(num_partitions)
+    print(f"  Repartitioned to {num_partitions} partitions")
+    
+    # Step 3: Convert to MDS
+    print(f"  Step 3: Converting to MDS...")
+    
+    # Clean output directory
+    if os.path.exists(output_path):
+        shutil.rmtree(output_path)
+    
+    # MDS kwargs - dataframe_to_mds requires explicit types
+    # Output types compatible with train.py expectations:
+    # - input_ids: ndarray:int64 (train.py converts to int64 anyway)
+    # - length: int64 (compatible with Python int)
+    mds_kwargs = {
+        'out': output_path,
+        'columns': {'input_ids': 'ndarray:int64', 'length': 'int64'},
+        'compression': 'zstd',
+        'size_limit': '256mb'
+    }
+    
+    print(f"  Writing MDS with dataframe_to_mds ({num_partitions} parallel writers)...")
+    dataframe_to_mds(spark_df, merge_index=True, mds_kwargs=mds_kwargs)
+    
+    # Cleanup temp Parquet
+    print(f"  Cleaning up temp Parquet...")
+    shutil.rmtree(parquet_path)
+    
+    print(f"  {name} complete!")
+
+
+def prepare_mds_dataset(force_recreate: bool = False, num_partitions: int = None):
+    """
+    Convert HuggingFace dataset to MDS format using Spark's dataframe_to_mds.
+    This uses parallel processing for fast conversion (~9 mins for 30M samples).
     
     Args:
         force_recreate: If True, recreate even if MDS already exists
+        num_partitions: Number of Spark partitions (auto-detected if None)
     """
     from datasets import load_from_disk
+    import time
     
     # Check if already exists (skip if valid and not forcing recreate)
     mds_exists = check_mds_valid(PATHS['train_dir']) and check_mds_valid(PATHS['test_dir'])
@@ -319,24 +409,19 @@ def prepare_mds_dataset(force_recreate: bool = False):
         return True
     
     print("=" * 60)
-    print("CONVERTING TO MDS FORMAT")
+    print("CONVERTING TO MDS FORMAT (Spark Parallel)")
     print("=" * 60)
     if mds_exists:
         print("⚠️  force_recreate=True, will overwrite existing data")
-    print("⚠️  This loads data to memory via pandas for fast processing")
     print()
+    
+    start_time = time.time()
     
     # Check source dataset exists
     if not os.path.exists(PATHS['source_dataset']):
         print(f"❌ Source dataset not found: {PATHS['source_dataset']}")
         print("   Please run the download cell first.")
         return False
-    
-    # Clean output directories before writing
-    for path in [PATHS['train_dir'], PATHS['test_dir']]:
-        if os.path.exists(path):
-            shutil.rmtree(path)
-        os.makedirs(path, exist_ok=True)
     
     # Load source dataset
     print(f"Loading source dataset: {PATHS['source_dataset']}")
@@ -351,28 +436,30 @@ def prepare_mds_dataset(force_recreate: bool = False):
     print(f"Train samples: {len(train_ds):,}")
     print(f"Test samples: {len(test_ds):,}")
     
-    # Write train MDS (converts to pandas for fast iteration)
+    # Write train MDS using Spark parallel processing
     print(f"\nWriting train MDS: {PATHS['train_dir']}")
-    write_mds_fast(train_ds, PATHS['train_dir'], name="Train")
+    write_mds_spark(train_ds, PATHS['train_dir'], name="Train", num_partitions=num_partitions)
     
     train_size = get_dir_size(PATHS['train_dir'])
     print(f"✅ Train MDS complete: {train_size}")
     
     # Write test MDS
     print(f"\nWriting test MDS: {PATHS['test_dir']}")
-    write_mds_fast(test_ds, PATHS['test_dir'], name="Test")
+    write_mds_spark(test_ds, PATHS['test_dir'], name="Test", num_partitions=num_partitions)
     
     test_size = get_dir_size(PATHS['test_dir'])
     print(f"✅ Test MDS complete: {test_size}")
     
+    elapsed = time.time() - start_time
     print("\n" + "=" * 60)
-    print("✅ MDS CONVERSION COMPLETE!")
+    print(f"✅ MDS CONVERSION COMPLETE! (Total time: {elapsed/60:.1f} minutes)")
     print("=" * 60)
     return True
 
 # Run MDS conversion
 # Set force_recreate=True to recreate even if exists
-prepare_mds_dataset(force_recreate=True)
+# num_partitions=None auto-detects based on cluster cores
+prepare_mds_dataset(force_recreate=True, num_partitions=None)
 
 # COMMAND ----------
 
