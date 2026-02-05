@@ -150,52 +150,53 @@ class FailureTestCallback(Callback):
             current_epoch = int(state.timestamp.epoch)
             
             if current_epoch == self.fail_at_epoch:
-                # Only rank 0 reads/writes the counter and makes the decision
+                # Rank 0 makes the decision and increments counter if needed
+                should_fail = False
+                new_count = 0
+                
                 if self._is_rank_zero():
                     failure_count = self._get_failure_count()
                     
                     if failure_count < self.max_failures:
-                        # Increment counter
-                        self._new_count = self._increment_failure_count()
-                        self._should_fail = True
+                        new_count = self._increment_failure_count()
+                        should_fail = True
                     else:
-                        self._should_fail = False
+                        should_fail = False
                         print(f"\n{'='*60}")
                         print(f"✅ FAILURE TEST: Skipping failure (already failed {failure_count} times)")
                         print(f"   Training will continue normally from checkpoint")
                         print(f"{'='*60}\n")
                 
-                # Synchronize all ranks - ensure rank 0 has written the counter file
-                dist.barrier()
+                # Broadcast decision from rank 0 to all ranks using torch.distributed
+                # This ensures all ranks make the same decision
+                should_fail_tensor = torch.tensor([1 if should_fail else 0], dtype=torch.int64, device='cuda')
+                torch.distributed.broadcast(should_fail_tensor, src=0)
+                should_fail = should_fail_tensor.item() == 1
                 
-                # All ranks read the decision (by reading the counter file)
-                # This ensures consistency across all ranks
-                failure_count = self._get_failure_count()
-                should_fail = failure_count <= self.max_failures and failure_count > 0
+                # Broadcast the new count for the error message
+                new_count_tensor = torch.tensor([new_count], dtype=torch.int64, device='cuda')
+                torch.distributed.broadcast(new_count_tensor, src=0)
+                new_count = new_count_tensor.item()
                 
-                # Re-check: if we just incremented, we should fail
-                # The counter was incremented by rank 0, so if count > 0 and count <= max, fail
-                if self._is_rank_zero() and self._should_fail:
-                    error_msg = (
-                        f"\n{'='*60}\n"
-                        f"💥 INTENTIONAL FAILURE (Test Mode)\n"
-                        f"{'='*60}\n"
-                        f"  Epoch: {current_epoch}\n"
-                        f"  Failure count: {self._new_count}/{self.max_failures}\n"
-                        f"  Remaining failures: {self.max_failures - self._new_count}\n"
-                        f"{'='*60}\n"
-                        f"This failure is intentional to test checkpoint recovery.\n"
-                        f"The job should restart and resume from the last checkpoint.\n"
-                        f"{'='*60}"
-                    )
-                    # Raise on rank 0 - this will cause the distributed training to fail
+                if should_fail:
+                    # All ranks raise the same error together
+                    rank = dist.get_global_rank()
+                    if rank == 0:
+                        error_msg = (
+                            f"\n{'='*60}\n"
+                            f"💥 INTENTIONAL FAILURE (Test Mode)\n"
+                            f"{'='*60}\n"
+                            f"  Epoch: {current_epoch}\n"
+                            f"  Failure count: {new_count}/{self.max_failures}\n"
+                            f"  Remaining failures: {self.max_failures - new_count}\n"
+                            f"{'='*60}\n"
+                            f"This failure is intentional to test checkpoint recovery.\n"
+                            f"The job should restart and resume from the last checkpoint.\n"
+                            f"{'='*60}"
+                        )
+                    else:
+                        error_msg = f"Intentional failure (rank {rank}, synced with rank 0)"
                     raise RuntimeError(error_msg)
-                elif not self._is_rank_zero() and should_fail:
-                    # Non-rank-0 processes also need to fail to ensure clean shutdown
-                    # Wait a moment for rank 0's error to propagate
-                    import time
-                    time.sleep(2)
-                    raise RuntimeError(f"Intentional failure (rank {dist.get_global_rank()})")
         
         # Reset counter when training completes successfully (only on rank 0)
         if event == Event.FIT_END:
