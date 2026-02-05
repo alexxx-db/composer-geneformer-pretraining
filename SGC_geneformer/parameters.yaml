@@ -97,6 +97,18 @@ console_log_interval: 1ba
 # Auto resume
 autoresume: True
 
+# ============================================
+# Failure Injection (for testing auto-resume)
+# ============================================
+# Enable this to test failure handling and auto-resume functionality.
+# The training will intentionally fail at `fail_at_batch` for the first
+# `max_failures` attempts, then succeed on the next attempt.
+# IMPORTANT: Set max_retries >= max_failures in train.yaml
+failure_injection:
+  enabled: true        # Set to true to enable failure testing
+  max_failures: 3       # Number of times to fail before succeeding
+  fail_at_batch: 50     # Which batch to fail at (should be after a checkpoint)
+
 # Checkpoint settings
 save_interval: 10ep
 save_num_checkpoints_to_keep: 100

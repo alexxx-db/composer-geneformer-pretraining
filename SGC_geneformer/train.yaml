@@ -25,6 +25,8 @@ environment:
 compute:
   gpus: 16
   gpu_type: h100
+# Set to 0 for normal operation, or >= 3 for failure injection testing
+# When testing failure_injection, set this to at least max_failures value
 max_retries: 0
 code_source:
   type: snapshot

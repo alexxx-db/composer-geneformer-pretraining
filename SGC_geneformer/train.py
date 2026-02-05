@@ -32,6 +32,104 @@ from omegaconf import OmegaConf as om
 from cfgutils import *
 
 
+# ============================================
+# Failure Injection Callback for Testing Auto-Resume
+# ============================================
+class FailureInjectionCallback(Callback):
+    """
+    Callback to simulate failures for testing auto-resume functionality.
+    
+    This callback will intentionally crash the training after a specified number
+    of batches for the first N attempts. On subsequent attempts, training continues
+    normally from the checkpoint.
+    
+    Args:
+        attempt_file: Path to file tracking attempt count (should be on persistent volume)
+        max_failures: Number of times to fail before allowing training to complete (default: 3)
+        fail_at_batch: Which batch to fail at (default: 50)
+    """
+    
+    def __init__(self, attempt_file: str, max_failures: int = 3, fail_at_batch: int = 50):
+        self.attempt_file = attempt_file
+        self.max_failures = max_failures
+        self.fail_at_batch = fail_at_batch
+        self.attempt_number = self._get_or_increment_attempt()
+        
+    def _get_or_increment_attempt(self) -> int:
+        """Read current attempt count and increment it."""
+        attempt = 1
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(self.attempt_file), exist_ok=True)
+        
+        # Read existing attempt count
+        if os.path.exists(self.attempt_file):
+            try:
+                with open(self.attempt_file, 'r') as f:
+                    attempt = int(f.read().strip()) + 1
+            except (ValueError, IOError):
+                attempt = 1
+        
+        # Write new attempt count
+        with open(self.attempt_file, 'w') as f:
+            f.write(str(attempt))
+        
+        return attempt
+    
+    def reset_attempts(self):
+        """Reset the attempt counter (call this after successful completion)."""
+        if os.path.exists(self.attempt_file):
+            os.remove(self.attempt_file)
+            print(f"[FailureInjection] Reset attempt counter")
+    
+    def init(self, state: State, logger: Logger) -> None:
+        """Called when the trainer initializes."""
+        if dist.get_global_rank() == 0:
+            print(f"\n{'='*60}")
+            print(f"[FailureInjection] FAILURE INJECTION ENABLED")
+            print(f"[FailureInjection] Attempt: {self.attempt_number} / {self.max_failures + 1}")
+            print(f"[FailureInjection] Will fail at batch: {self.fail_at_batch}")
+            if self.attempt_number <= self.max_failures:
+                print(f"[FailureInjection] ⚠️  This run WILL FAIL (attempt {self.attempt_number})")
+            else:
+                print(f"[FailureInjection] ✅ This run will SUCCEED (past failure threshold)")
+            print(f"{'='*60}\n")
+    
+    def batch_end(self, state: State, logger: Logger) -> None:
+        """Called at the end of each batch."""
+        current_batch = int(state.timestamp.batch)
+        
+        # Only fail if we haven't exceeded max_failures
+        if self.attempt_number <= self.max_failures:
+            if current_batch == self.fail_at_batch:
+                if dist.get_global_rank() == 0:
+                    print(f"\n{'='*60}")
+                    print(f"[FailureInjection] 💥 INJECTING FAILURE at batch {current_batch}")
+                    print(f"[FailureInjection] Attempt {self.attempt_number} of {self.max_failures}")
+                    print(f"[FailureInjection] Training will auto-resume from checkpoint")
+                    print(f"{'='*60}\n")
+                
+                # Synchronize all ranks before failing
+                dist.barrier()
+                
+                # Raise an exception to simulate failure
+                raise RuntimeError(
+                    f"[FailureInjection] Intentional failure at batch {current_batch} "
+                    f"(attempt {self.attempt_number}/{self.max_failures}). "
+                    f"Set max_retries >= {self.max_failures} in train.yaml to test auto-resume."
+                )
+    
+    def fit_end(self, state: State, logger: Logger) -> None:
+        """Called when training completes successfully."""
+        if dist.get_global_rank() == 0:
+            print(f"\n{'='*60}")
+            print(f"[FailureInjection] ✅ Training completed successfully!")
+            print(f"[FailureInjection] Total attempts: {self.attempt_number}")
+            print(f"[FailureInjection] Resetting attempt counter...")
+            print(f"{'='*60}\n")
+            self.reset_attempts()
+
+
 def build_volume_path(cfg: DictConfig) -> str:
     """Build the Databricks volume path from catalog, schema, and volume_name."""
     volume_cfg = cfg.volume
@@ -128,6 +226,17 @@ def main(cfg: DictConfig):
         build_callback(name, callback_cfg)
         for name, callback_cfg in cfg.get('callbacks', {}).items()
     ]
+    
+    # Add failure injection callback if enabled (for testing auto-resume)
+    failure_injection_cfg = cfg.get('failure_injection', None)
+    if failure_injection_cfg and failure_injection_cfg.get('enabled', False):
+        attempt_file = f"{checkpoint_folder}/failure_injection_attempts.txt"
+        failure_callback = FailureInjectionCallback(
+            attempt_file=attempt_file,
+            max_failures=failure_injection_cfg.get('max_failures', 3),
+            fail_at_batch=failure_injection_cfg.get('fail_at_batch', 50),
+        )
+        callbacks.append(failure_callback)
 
     # Algorithms
     algorithms = [
