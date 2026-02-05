@@ -16,7 +16,7 @@ max_retries: 0
 #     # repo_path is required for local development, and changes git commit is required for job submission
 #     repo_path: /Users/guanyu.chen/Documents/Projects/composer_geneformer_pretrain/
 code_source:
-  type: git_repo
+  type: git_clone
   git_repo: srijitcn/composer_geneformer_pretrain
   git_branch: sgc_cli_guanyu # use your branch
   ssh_clone: true # Should be true if using a private repo
