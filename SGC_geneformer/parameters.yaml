@@ -84,8 +84,8 @@ mlm_probability: 0.15
 train_batch_size: 16
 eval_batch_size: 16
 device_train_microbatch_size: 16
-train_subset_num_batches: 500  # -1 means use all batches
-eval_subset_num_batches: 100   # -1 means use all batches
+train_subset_num_batches: 100  # -1 means use all batches
+eval_subset_num_batches: 20   # -1 means use all batches
 max_duration: 1000ep
 eval_interval: 100ep
 
