@@ -55,7 +55,7 @@ def main(cfg: DictConfig):
     streaming_dataset_location = cfg.streaming_dataset_location
 
     # Use Databricks volume path instead of S3
-    volume_base_path = cfg.get("volume_base_path", "/Volumes/main/srijit_nair/geneformer/data")
+    volume_base_path = cfg.get("volume_base_path", "/Volumes/main/guanyu_chen/geneformer/data")
 
     # batch size for training and eval
     train_batch_size = cfg.train_batch_size  #<< This is per device batch size

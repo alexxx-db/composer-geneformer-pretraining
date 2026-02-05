@@ -67,7 +67,7 @@ eval_batch_size: 16
 device_train_microbatch_size : 16
 train_subset_num_batches : 100
 eval_subset_num_batches : 10
-max_duration: 10060ep
+max_duration: 10ep
 eval_interval: 10ep
 # Logging
 progress_bar: false
@@ -78,9 +78,9 @@ console_log_interval: 1ba
 autoresume : True
 
 #Checkpoint to local volume (S3 commented out due to credentials issue)
-save_interval: 20ep
+save_interval: 5ep
 save_num_checkpoints_to_keep: 500
 save_overwrite: True #overwrite checkpoint if exists
 #save_folder: "dbfs:/databricks/mlflow-tracking/{mlflow_experiment_id}/{mlflow_run_id}/artifacts/"
 #save_folder: "s3://srijit-nair-sandbox-bucket/geneformer/pretrain/demo/restart/checkpoints/full"
-save_folder: "/Volumes/main/guanyu_chen/sgc/checkpoints/10000eps/"
+save_folder: "/Volumes/main/guanyu_chen/sgc/checkpoints/new_eps/"

@@ -300,36 +300,27 @@ def get_optimal_partitions():
         return 32
 
 
-def write_mds_spark(dataset, output_path: str, name: str = "", num_partitions: int = None, force_recreate: bool = False):
+def convert_arrow_to_parquet(dataset, name: str, force_recreate: bool = False):
     """
-    Write dataset to MDS format using Spark's dataframe_to_mds for parallel processing.
-    Uses Parquet as intermediate format for optimal Spark performance.
-    
-    Pipeline: HuggingFace Dataset → Parquet (local SSD) → Copy to Volume → Spark DataFrame → MDS
+    Convert HuggingFace dataset (Arrow-backed) to Parquet format.
+    Writes to local SSD first, then copies to Volume for Spark access.
     
     Args:
         dataset: HuggingFace dataset to convert
-        output_path: Output path for MDS files
-        name: Name for logging
-        num_partitions: Number of partitions (auto-detected if None)
-        force_recreate: If True, clean up temp files after conversion
-    """
-    from streaming.base.converters import dataframe_to_mds
-    from pyspark.sql.functions import col
-    from pyspark.sql.types import LongType
-    import pyarrow.parquet as pq
+        name: Name for the parquet folder (e.g., "train", "test")
+        force_recreate: If True, clean existing temp files first
     
-    # Auto-detect optimal partitions if not specified
-    if num_partitions is None:
-        num_partitions = get_optimal_partitions()
+    Returns:
+        tuple: (local_parquet_path, volume_parquet_path)
+    """
+    import pyarrow.parquet as pq
     
     # Temp paths - save in same folder as geneformer dataset
     dataset_base_folder = f"{VOLUME_PATH}/geneformer/data/dataset"
     local_parquet_path = f"/local_disk0/temp_parquet_{name.lower()}"
     volume_parquet_path = f"{dataset_base_folder}/temp_parquet_{name.lower()}"
     
-    # Step 1: Convert HuggingFace dataset to Parquet using PyArrow directly (fastest)
-    print(f"  Step 1: Converting {len(dataset):,} samples to Parquet (local SSD)...")
+    print(f"  Converting {name}: {len(dataset):,} samples to Parquet...")
     
     # Only clean temp directories if force_recreate is True
     if force_recreate:
@@ -341,43 +332,55 @@ def write_mds_spark(dataset, output_path: str, name: str = "", num_partitions: i
     
     # Access the underlying Arrow table directly (no conversion needed)
     arrow_table = dataset.data.table
-    print(f"  Arrow table: {arrow_table.num_rows:,} rows, {arrow_table.nbytes / 1e9:.2f} GB")
+    print(f"    Arrow table: {arrow_table.num_rows:,} rows, {arrow_table.nbytes / 1e9:.2f} GB")
     
     # Write to Parquet using PyArrow (much faster than HF's to_parquet)
     parquet_file = f"{local_parquet_path}/data.parquet"
     pq.write_table(arrow_table, parquet_file, compression='snappy')
-    print(f"  Parquet saved to local SSD: {parquet_file}")
+    print(f"    Saved to local SSD: {parquet_file}")
     
-    # Step 2: Copy Parquet from local disk to Volume (Spark can't read local_disk0 directly)
-    print(f"  Step 2: Copying Parquet to Volume for Spark access...")
-    
-    # Only clean volume temp directory if force_recreate is True
-    if force_recreate and os.path.exists(volume_parquet_path):
-        shutil.rmtree(volume_parquet_path)
-    
-    # Use dbutils.fs.cp to copy from local to volume
+    # Copy from local disk to Volume (Spark can't read local_disk0 directly)
+    print(f"    Copying to Volume...")
     dbutils.fs.cp(
         f"file:{local_parquet_path}/",
         f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME_NAME}/geneformer/data/dataset/temp_parquet_{name.lower()}",
         recurse=True
     )
-    print(f"  Copied to Volume: {volume_parquet_path}")
+    print(f"    Copied to: {volume_parquet_path}")
     
-    # Step 3: Load Parquet into Spark DataFrame
-    print(f"  Step 3: Loading Parquet into Spark DataFrame...")
+    return local_parquet_path, volume_parquet_path
+
+
+def convert_parquet_to_mds(volume_parquet_path: str, output_path: str, name: str = "", num_partitions: int = None):
+    """
+    Convert Parquet file to MDS format using Spark's dataframe_to_mds.
+    
+    Args:
+        volume_parquet_path: Path to Parquet file on Volume (Spark-accessible)
+        output_path: Output path for MDS files
+        name: Name for logging
+        num_partitions: Number of partitions (auto-detected if None)
+    """
+    from streaming.base.converters import dataframe_to_mds
+    from pyspark.sql.functions import col
+    from pyspark.sql.types import LongType
+    
+    # Auto-detect optimal partitions if not specified
+    if num_partitions is None:
+        num_partitions = get_optimal_partitions()
+    
+    # Load Parquet into Spark DataFrame
+    print(f"  Loading {name} Parquet into Spark DataFrame...")
     spark_df = spark.read.parquet(volume_parquet_path)
     row_count = spark_df.count()
-    print(f"  Loaded {row_count:,} rows")
+    print(f"    Loaded {row_count:,} rows")
     
     # Cast length to LongType to match expected 'int64'
     spark_df = spark_df.withColumn("length", col("length").cast(LongType()))
     
     # Repartition for parallel writes
     spark_df = spark_df.repartition(num_partitions)
-    print(f"  Repartitioned to {num_partitions} partitions")
-    
-    # Step 4: Convert to MDS
-    print(f"  Step 4: Converting to MDS...")
+    print(f"    Repartitioned to {num_partitions} partitions")
     
     # Clean output directory if exists
     if os.path.exists(output_path):
@@ -394,28 +397,23 @@ def write_mds_spark(dataset, output_path: str, name: str = "", num_partitions: i
         'size_limit': '256mb'
     }
     
-    print(f"  Writing MDS with dataframe_to_mds ({num_partitions} parallel writers)...")
+    print(f"  Writing {name} MDS with dataframe_to_mds ({num_partitions} parallel writers)...")
     dataframe_to_mds(spark_df, merge_index=True, mds_kwargs=mds_kwargs)
     
-    # Only cleanup temp files if force_recreate is True
-    if force_recreate:
-        print(f"  Cleaning up temp files (force_recreate=True)...")
-        if os.path.exists(local_parquet_path):
-            shutil.rmtree(local_parquet_path)
-        if os.path.exists(volume_parquet_path):
-            shutil.rmtree(volume_parquet_path)
-    else:
-        print(f"  Keeping temp files for potential reuse:")
-        print(f"    - Local SSD: {local_parquet_path}")
-        print(f"    - Volume: {volume_parquet_path}")
-    
-    print(f"  {name} complete!")
+    print(f"  {name} MDS complete!")
 
 
 def prepare_mds_dataset(force_recreate: bool = False, num_partitions: int = None):
     """
     Convert HuggingFace dataset to MDS format using Spark's dataframe_to_mds.
     This uses parallel processing for fast conversion (~9 mins for 30M samples).
+    
+    Optimized pipeline:
+    1. Load source dataset ONCE
+    2. Split into train/test
+    3. Convert BOTH to Parquet (Arrow → Parquet) - one-time Arrow access
+    4. Convert Parquet → MDS for each split
+    5. Cleanup temp files if force_recreate=True
     
     Args:
         force_recreate: If True, recreate even if MDS already exists
@@ -450,32 +448,67 @@ def prepare_mds_dataset(force_recreate: bool = False, num_partitions: int = None
         print("   Please run the download cell first.")
         return False
     
-    # Load source dataset
-    print(f"Loading source dataset: {PATHS['source_dataset']}")
+    # =========================================
+    # STEP 1: Load source dataset ONCE
+    # =========================================
+    print(f"Step 1: Loading source dataset: {PATHS['source_dataset']}")
     dataset = load_from_disk(PATHS['source_dataset'])
-    print(f"Dataset loaded: {dataset}")
-    print(f"Total samples: {len(dataset):,}")
+    print(f"  Dataset loaded: {dataset}")
+    print(f"  Total samples: {len(dataset):,}")
     
-    # Split dataset
-    print(f"\nSplitting dataset (test_size={TEST_SPLIT_RATIO}, seed={RANDOM_SEED})...")
+    # =========================================
+    # STEP 2: Split dataset
+    # =========================================
+    print(f"\nStep 2: Splitting dataset (test_size={TEST_SPLIT_RATIO}, seed={RANDOM_SEED})...")
     split = dataset.train_test_split(test_size=TEST_SPLIT_RATIO, seed=RANDOM_SEED)
     train_ds, test_ds = split["train"], split["test"]
-    print(f"Train samples: {len(train_ds):,}")
-    print(f"Test samples: {len(test_ds):,}")
+    print(f"  Train samples: {len(train_ds):,}")
+    print(f"  Test samples: {len(test_ds):,}")
     
-    # Write train MDS using Spark parallel processing
-    print(f"\nWriting train MDS: {PATHS['train_dir']}")
-    write_mds_spark(train_ds, PATHS['train_dir'], name="Train", num_partitions=num_partitions, force_recreate=force_recreate)
+    # =========================================
+    # STEP 3: Convert BOTH datasets to Parquet
+    # (Arrow access happens only once per dataset)
+    # =========================================
+    print(f"\nStep 3: Converting Arrow to Parquet (both train and test)...")
+    train_local_pq, train_volume_pq = convert_arrow_to_parquet(train_ds, "train", force_recreate=force_recreate)
+    test_local_pq, test_volume_pq = convert_arrow_to_parquet(test_ds, "test", force_recreate=force_recreate)
+    print(f"  ✓ Both datasets converted to Parquet")
     
+    # Free memory - we no longer need the HuggingFace datasets
+    del dataset, split, train_ds, test_ds
+    
+    # =========================================
+    # STEP 4: Convert Parquet to MDS
+    # =========================================
+    print(f"\nStep 4: Converting Parquet to MDS...")
+    
+    print(f"\n  [Train] {PATHS['train_dir']}")
+    convert_parquet_to_mds(train_volume_pq, PATHS['train_dir'], name="Train", num_partitions=num_partitions)
     train_size = get_dir_size(PATHS['train_dir'])
-    print(f"✅ Train MDS complete: {train_size}")
+    print(f"  ✓ Train MDS complete: {train_size}")
     
-    # Write test MDS
-    print(f"\nWriting test MDS: {PATHS['test_dir']}")
-    write_mds_spark(test_ds, PATHS['test_dir'], name="Test", num_partitions=num_partitions, force_recreate=force_recreate)
-    
+    print(f"\n  [Test] {PATHS['test_dir']}")
+    convert_parquet_to_mds(test_volume_pq, PATHS['test_dir'], name="Test", num_partitions=num_partitions)
     test_size = get_dir_size(PATHS['test_dir'])
-    print(f"✅ Test MDS complete: {test_size}")
+    print(f"  ✓ Test MDS complete: {test_size}")
+    
+    # =========================================
+    # STEP 5: Cleanup temp files (if force_recreate)
+    # =========================================
+    if force_recreate:
+        print(f"\nStep 5: Cleaning up temp files (force_recreate=True)...")
+        for local_pq, volume_pq in [(train_local_pq, train_volume_pq), (test_local_pq, test_volume_pq)]:
+            if os.path.exists(local_pq):
+                shutil.rmtree(local_pq)
+            if os.path.exists(volume_pq):
+                shutil.rmtree(volume_pq)
+        print(f"  ✓ Temp files cleaned")
+    else:
+        print(f"\nStep 5: Keeping temp Parquet files for potential reuse:")
+        print(f"  - Train (local): {train_local_pq}")
+        print(f"  - Train (volume): {train_volume_pq}")
+        print(f"  - Test (local): {test_local_pq}")
+        print(f"  - Test (volume): {test_volume_pq}")
     
     elapsed = time.time() - start_time
     print("\n" + "=" * 60)
