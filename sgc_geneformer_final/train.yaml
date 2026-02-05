@@ -13,7 +13,7 @@ environment:
     NCCL_DEBUG: "INFO"
   dependencies: dependencies.yaml
 compute:
-  gpus: 2
+  gpus: 8
   gpu_type: a10
 max_retries: 0
 code_source:

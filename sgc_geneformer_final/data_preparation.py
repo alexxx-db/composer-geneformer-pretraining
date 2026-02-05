@@ -475,7 +475,7 @@ def prepare_mds_dataset(force_recreate: bool = False, num_partitions: int = None
     print(f"  ✓ Both datasets converted to Parquet")
     
     # Free memory - we no longer need the HuggingFace datasets
-    del dataset, split, train_ds, test_ds
+    # del dataset, split, train_ds, test_ds
     
     # =========================================
     # STEP 4: Convert Parquet to MDS
