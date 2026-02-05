@@ -14,7 +14,9 @@ code_source:
     repo_path: /Users/srijit.nair/Projects/sgcli/composer_geneformer_pretrain
 command: |-
   echo ">>> In SGC_hello_world folder, starting training"
+  
   cd SGC_hello_world
+  
   torchrun \
     --nnodes=2 \
     --nproc_per_node=1 \
