@@ -15,7 +15,8 @@ code_source:
 command: |-
   echo ">>> In SGC_hello_world folder, starting training"
   
-  cd composer_geneformer_pretrain/SGC_hello_world
+  #Repo is in $HOME, so cd relative to $HOME
+  cd $HOME/composer_geneformer_pretrain/SGC_hello_world
   
   torchrun \
     --nnodes=2 \
