@@ -86,7 +86,7 @@ eval_batch_size: 16
 device_train_microbatch_size: 16
 train_subset_num_batches: 100  # -1 means use all batches
 eval_subset_num_batches: 10   # -1 means use all batches
-max_duration: 20ep
+max_duration: 100ep
 eval_interval: 5ep
 
 # Logging
@@ -99,5 +99,5 @@ autoresume: True
 
 # Checkpoint settings
 save_interval: 5ep
-save_num_checkpoints_to_keep: 3 
+save_num_checkpoints_to_keep: 10
 save_overwrite: True
