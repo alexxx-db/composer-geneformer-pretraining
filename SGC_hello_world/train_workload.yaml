@@ -10,10 +10,11 @@ max_retries: 0
 code_source:
   type: snapshot
   snapshot:
-    # git branch and commit are not required for local development
+    # git branch and commit are optional
     # git_branch: sgc_cli_guanyu
     # git_commit: fa5c16c888c47c93f8afd48ae0aa58ba48898acd
-    # repo_path is required for local development, and changes git commit is required for job submission
+
+    # repo_path is local path for your repo, and changes git commit is required for job submission
     repo_path: /Users/guanyu.chen/Documents/Projects/composer_geneformer_pretrain/
 command: |-
   cd $HOME/composer_geneformer_pretrain/SGC_hello_world

@@ -157,7 +157,15 @@ def main(cfg: DictConfig):
 
     # Initialize distributed training before creating StreamingDataset
     dist.initialize_dist(device=cfg.get("device", "gpu"))
-    print(f"\nDistributed initialized: world_size={dist.get_world_size()}, rank={dist.get_global_rank()}")
+    world_size = dist.get_world_size()
+    global_rank = dist.get_global_rank()
+    print(f"\nDistributed initialized: world_size={world_size}, rank={global_rank}")
+    
+    # For multi-node training, calculate num_canonical_nodes (number of physical nodes)
+    # Assuming 8 GPUs per node for H100 clusters
+    gpus_per_node = 8
+    num_canonical_nodes = max(1, world_size // gpus_per_node)
+    print(f"Using num_canonical_nodes={num_canonical_nodes} for StreamingDataset")
 
     # Verify all required data exists (only on rank 0, then sync)
     if dist.get_global_rank() == 0:
@@ -167,15 +175,21 @@ def main(cfg: DictConfig):
     # Synchronize all ranks
     dist.barrier()
 
-    # Create streaming dataset
+    # Create streaming dataset - using remote for source data and local for SSD cache
     print(f"\nLoading streaming dataset from: {paths['streaming_dataset']}")
     streaming_dataset_train = StreamingDataset(
-        local=paths['train_dir'],
-        batch_size=train_batch_size
+        remote=paths['train_dir'],              # Read compressed data from here
+        local="/local_disk0/streaming_cache/train",  # Cache decompressed data here (local SSD)
+        batch_size=train_batch_size,
+        num_canonical_nodes=num_canonical_nodes,
+        shuffle=True,  # Enable shuffling for training
     )
     streaming_dataset_eval = StreamingDataset(
-        local=paths['test_dir'],
-        batch_size=eval_batch_size
+        remote=paths['test_dir'],               # Read compressed data from here
+        local="/local_disk0/streaming_cache/test",   # Cache decompressed data here (local SSD)
+        batch_size=eval_batch_size,
+        num_canonical_nodes=num_canonical_nodes,
+        shuffle=False,  # No shuffling for eval
     )
 
     # Prepare composer model
