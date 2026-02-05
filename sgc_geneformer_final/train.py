@@ -45,8 +45,8 @@ def get_data_paths(cfg: DictConfig, volume_path: str) -> dict:
         'source_dataset': f"{volume_path}/{data_cfg.source_dataset}",
         'streaming_dataset': f"{volume_path}/{data_cfg.streaming_dataset}",
         'token_dictionary': f"{volume_path}/{data_cfg.token_dictionary}",
-        'train_dir': f"{volume_path}/{data_cfg.streaming_dataset}/rename_train",
-        'test_dir': f"{volume_path}/{data_cfg.streaming_dataset}/rename_test",
+        'train_dir': f"{volume_path}/{data_cfg.streaming_dataset}/train_renamed",
+        'test_dir': f"{volume_path}/{data_cfg.streaming_dataset}/test_renamed",
     }
 
 
