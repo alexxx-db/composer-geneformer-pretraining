@@ -25,9 +25,7 @@ environment:
 compute:
   gpus: 8
   gpu_type: a10
-# Set to 0 for normal operation, or >= 3 for failure injection testing
-# When testing failure_injection, set this to at least max_failures value
-max_retries: 0
+max_retries: 3
 code_source:
   type: snapshot
   snapshot:

@@ -1,6 +1,7 @@
 ##1 Set parameters
 
 import datetime
+import json
 import os
 import pickle
 import random
@@ -33,101 +34,131 @@ from cfgutils import *
 
 
 # ============================================
-# Failure Injection Callback for Testing Auto-Resume
+# Failure Testing Callback
 # ============================================
-class FailureInjectionCallback(Callback):
+class FailureTestCallback(Callback):
     """
-    Callback to simulate failures for testing auto-resume functionality.
+    A callback that intentionally fails training at a specified epoch to test 
+    checkpoint recovery and autoresume functionality.
     
-    This callback will intentionally crash the training after a specified number
-    of batches for the first N attempts. On subsequent attempts, training continues
-    normally from the checkpoint.
+    The callback tracks the number of failures using a persistent file and only
+    fails up to `max_failures` times. After that, training continues normally.
     
     Args:
-        attempt_file: Path to file tracking attempt count (should be on persistent volume)
-        max_failures: Number of times to fail before allowing training to complete (default: 3)
-        fail_at_batch: Which batch to fail at (default: 50)
+        fail_at_epoch: The epoch number at which to trigger a failure (0-indexed)
+        max_failures: Maximum number of times to fail before allowing training to continue
+        failure_counter_path: Path to file that tracks failure count across restarts
+        enabled: Whether the failure testing is enabled
+    
+    Example usage in parameters.yaml:
+        failure_test:
+          enabled: true
+          fail_at_epoch: 7
+          max_failures: 3
+          failure_counter_path: /Volumes/.../failure_counter.json
     """
     
-    def __init__(self, attempt_file: str, max_failures: int = 3, fail_at_batch: int = 50):
-        self.attempt_file = attempt_file
+    def __init__(
+        self,
+        fail_at_epoch: int = 7,
+        max_failures: int = 3,
+        failure_counter_path: str = "/tmp/failure_counter.json",
+        enabled: bool = False,
+    ):
+        self.fail_at_epoch = fail_at_epoch
         self.max_failures = max_failures
-        self.fail_at_batch = fail_at_batch
-        self.attempt_number = self._get_or_increment_attempt()
+        self.failure_counter_path = failure_counter_path
+        self.enabled = enabled
         
-    def _get_or_increment_attempt(self) -> int:
-        """Read current attempt count and increment it."""
-        attempt = 1
+        if self.enabled:
+            print(f"\n{'='*60}")
+            print("⚠️  FAILURE TEST MODE ENABLED")
+            print(f"{'='*60}")
+            print(f"  - Will fail at epoch: {self.fail_at_epoch}")
+            print(f"  - Max failures: {self.max_failures}")
+            print(f"  - Counter file: {self.failure_counter_path}")
+            
+            current_count = self._get_failure_count()
+            print(f"  - Current failure count: {current_count}")
+            
+            if current_count >= self.max_failures:
+                print(f"  - Status: Already failed {current_count} times, will NOT fail again")
+            else:
+                print(f"  - Status: Will fail {self.max_failures - current_count} more time(s)")
+            print(f"{'='*60}\n")
+    
+    def _get_failure_count(self) -> int:
+        """Read the current failure count from the counter file."""
+        if os.path.exists(self.failure_counter_path):
+            try:
+                with open(self.failure_counter_path, 'r') as f:
+                    data = json.load(f)
+                    return data.get('failure_count', 0)
+            except (json.JSONDecodeError, IOError):
+                return 0
+        return 0
+    
+    def _increment_failure_count(self) -> int:
+        """Increment and persist the failure count. Returns the new count."""
+        current_count = self._get_failure_count()
+        new_count = current_count + 1
         
         # Ensure directory exists
-        os.makedirs(os.path.dirname(self.attempt_file), exist_ok=True)
+        os.makedirs(os.path.dirname(self.failure_counter_path), exist_ok=True)
         
-        # Read existing attempt count
-        if os.path.exists(self.attempt_file):
-            try:
-                with open(self.attempt_file, 'r') as f:
-                    attempt = int(f.read().strip()) + 1
-            except (ValueError, IOError):
-                attempt = 1
+        with open(self.failure_counter_path, 'w') as f:
+            json.dump({
+                'failure_count': new_count,
+                'last_failure_epoch': self.fail_at_epoch,
+                'max_failures': self.max_failures,
+            }, f, indent=2)
         
-        # Write new attempt count
-        with open(self.attempt_file, 'w') as f:
-            f.write(str(attempt))
-        
-        return attempt
+        return new_count
     
-    def reset_attempts(self):
-        """Reset the attempt counter (call this after successful completion)."""
-        if os.path.exists(self.attempt_file):
-            os.remove(self.attempt_file)
-            print(f"[FailureInjection] Reset attempt counter")
+    def _reset_failure_count(self):
+        """Reset the failure counter (call after successful training completion)."""
+        if os.path.exists(self.failure_counter_path):
+            os.remove(self.failure_counter_path)
+            print(f"🔄 Failure counter reset: {self.failure_counter_path}")
     
-    def init(self, state: State, logger: Logger) -> None:
-        """Called when the trainer initializes."""
-        if dist.get_global_rank() == 0:
-            print(f"\n{'='*60}")
-            print(f"[FailureInjection] FAILURE INJECTION ENABLED")
-            print(f"[FailureInjection] Attempt: {self.attempt_number} / {self.max_failures + 1}")
-            print(f"[FailureInjection] Will fail at batch: {self.fail_at_batch}")
-            if self.attempt_number <= self.max_failures:
-                print(f"[FailureInjection] ⚠️  This run WILL FAIL (attempt {self.attempt_number})")
-            else:
-                print(f"[FailureInjection] ✅ This run will SUCCEED (past failure threshold)")
-            print(f"{'='*60}\n")
-    
-    def batch_end(self, state: State, logger: Logger) -> None:
-        """Called at the end of each batch."""
-        current_batch = int(state.timestamp.batch)
+    def run_event(self, event: Event, state: State, logger: Logger):
+        """Called at each training event."""
+        if not self.enabled:
+            return
         
-        # Only fail if we haven't exceeded max_failures
-        if self.attempt_number <= self.max_failures:
-            if current_batch == self.fail_at_batch:
-                if dist.get_global_rank() == 0:
+        # Check at epoch start
+        if event == Event.EPOCH_START:
+            current_epoch = int(state.timestamp.epoch)
+            
+            if current_epoch == self.fail_at_epoch:
+                failure_count = self._get_failure_count()
+                
+                if failure_count < self.max_failures:
+                    # Increment counter and fail
+                    new_count = self._increment_failure_count()
+                    
+                    error_msg = (
+                        f"\n{'='*60}\n"
+                        f"💥 INTENTIONAL FAILURE (Test Mode)\n"
+                        f"{'='*60}\n"
+                        f"  Epoch: {current_epoch}\n"
+                        f"  Failure count: {new_count}/{self.max_failures}\n"
+                        f"  Remaining failures: {self.max_failures - new_count}\n"
+                        f"{'='*60}\n"
+                        f"This failure is intentional to test checkpoint recovery.\n"
+                        f"The job should restart and resume from the last checkpoint.\n"
+                        f"{'='*60}"
+                    )
+                    raise RuntimeError(error_msg)
+                else:
                     print(f"\n{'='*60}")
-                    print(f"[FailureInjection] 💥 INJECTING FAILURE at batch {current_batch}")
-                    print(f"[FailureInjection] Attempt {self.attempt_number} of {self.max_failures}")
-                    print(f"[FailureInjection] Training will auto-resume from checkpoint")
+                    print(f"✅ FAILURE TEST: Skipping failure (already failed {failure_count} times)")
+                    print(f"   Training will continue normally from checkpoint")
                     print(f"{'='*60}\n")
-                
-                # Synchronize all ranks before failing
-                dist.barrier()
-                
-                # Raise an exception to simulate failure
-                raise RuntimeError(
-                    f"[FailureInjection] Intentional failure at batch {current_batch} "
-                    f"(attempt {self.attempt_number}/{self.max_failures}). "
-                    f"Set max_retries >= {self.max_failures} in train.yaml to test auto-resume."
-                )
-    
-    def fit_end(self, state: State, logger: Logger) -> None:
-        """Called when training completes successfully."""
-        if dist.get_global_rank() == 0:
-            print(f"\n{'='*60}")
-            print(f"[FailureInjection] ✅ Training completed successfully!")
-            print(f"[FailureInjection] Total attempts: {self.attempt_number}")
-            print(f"[FailureInjection] Resetting attempt counter...")
-            print(f"{'='*60}\n")
-            self.reset_attempts()
+        
+        # Reset counter when training completes successfully
+        if event == Event.FIT_END:
+            self._reset_failure_count()
 
 
 def build_volume_path(cfg: DictConfig) -> str:
@@ -227,14 +258,17 @@ def main(cfg: DictConfig):
         for name, callback_cfg in cfg.get('callbacks', {}).items()
     ]
     
-    # Add failure injection callback if enabled (for testing auto-resume)
-    failure_injection_cfg = cfg.get('failure_injection', None)
-    if failure_injection_cfg and failure_injection_cfg.get('enabled', False):
-        attempt_file = f"{checkpoint_folder}/failure_injection_attempts.txt"
-        failure_callback = FailureInjectionCallback(
-            attempt_file=attempt_file,
-            max_failures=failure_injection_cfg.get('max_failures', 3),
-            fail_at_batch=failure_injection_cfg.get('fail_at_batch', 50),
+    # Add FailureTestCallback if enabled in config
+    failure_test_cfg = cfg.get('failure_test', {})
+    if failure_test_cfg.get('enabled', False):
+        # Default failure counter path in the checkpoint folder
+        default_counter_path = f"{checkpoint_folder}/failure_counter.json"
+        
+        failure_callback = FailureTestCallback(
+            fail_at_epoch=failure_test_cfg.get('fail_at_epoch', 7),
+            max_failures=failure_test_cfg.get('max_failures', 3),
+            failure_counter_path=failure_test_cfg.get('failure_counter_path', default_counter_path),
+            enabled=True,
         )
         callbacks.append(failure_callback)
 

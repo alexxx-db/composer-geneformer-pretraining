@@ -86,8 +86,8 @@ eval_batch_size: 16
 device_train_microbatch_size: 16
 train_subset_num_batches: 100  # -1 means use all batches
 eval_subset_num_batches: 20   # -1 means use all batches
-max_duration: 1000ep
-eval_interval: 100ep
+max_duration: 20ep
+eval_interval: 5ep
 
 # Logging
 progress_bar: false
@@ -98,18 +98,18 @@ console_log_interval: 1ba
 autoresume: True
 
 # ============================================
-# Failure Injection (for testing auto-resume)
+# Failure Test Configuration (for testing checkpoint recovery)
 # ============================================
-# Enable this to test failure handling and auto-resume functionality.
-# The training will intentionally fail at `fail_at_batch` for the first
-# `max_failures` attempts, then succeed on the next attempt.
-# IMPORTANT: Set max_retries >= max_failures in train.yaml
-failure_injection:
-  enabled: true        # Set to true to enable failure testing
-  max_failures: 3       # Number of times to fail before succeeding
-  fail_at_batch: 50     # Which batch to fail at (should be after a checkpoint)
+# Enable this to intentionally fail training at a specific epoch
+# to test that autoresume correctly picks up from the last checkpoint.
+# After max_failures, training will continue normally.
+failure_test:
+  enabled: true          # Set to true to enable failure testing
+  fail_at_epoch: 7        # Epoch at which to trigger failure (0-indexed)
+  max_failures: 3         # Fail this many times, then continue normally
+  # failure_counter_path: auto  # Optional: defaults to checkpoint_folder/failure_counter.json
 
 # Checkpoint settings
-save_interval: 10ep
+save_interval: 5ep
 save_num_checkpoints_to_keep: 100
 save_overwrite: True
