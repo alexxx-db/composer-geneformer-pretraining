@@ -300,29 +300,35 @@ def get_optimal_partitions():
         return 32
 
 
-def convert_arrow_to_parquet(dataset, name: str, force_recreate: bool = False):
+def convert_arrow_to_parquet(dataset, force_recreate: bool = False):
     """
     Convert HuggingFace dataset (Arrow-backed) to Parquet format.
     Writes to local SSD first, then copies to Volume for Spark access.
     
     Args:
-        dataset: HuggingFace dataset to convert
-        name: Name for the parquet folder (e.g., "train", "test")
+        dataset: HuggingFace dataset to convert (full dataset, not split)
         force_recreate: If True, clean existing temp files first
     
     Returns:
-        tuple: (local_parquet_path, volume_parquet_path)
+        str: volume_parquet_path (Spark-accessible path)
     """
     import pyarrow.parquet as pq
     
     # Temp paths - save in same folder as geneformer dataset
     dataset_base_folder = f"{VOLUME_PATH}/geneformer/data/dataset"
-    local_parquet_path = f"/local_disk0/temp_parquet_{name.lower()}"
-    volume_parquet_path = f"{dataset_base_folder}/temp_parquet_{name.lower()}"
+    local_parquet_path = "/local_disk0/temp_parquet_full"
+    volume_parquet_path = f"{dataset_base_folder}/temp_parquet_full"
     
-    print(f"  Converting {name}: {len(dataset):,} samples to Parquet...")
+    # Check if volume parquet already exists (skip if valid and not forcing recreate)
+    if not force_recreate and os.path.exists(volume_parquet_path):
+        parquet_files = [f for f in os.listdir(volume_parquet_path) if f.endswith('.parquet')]
+        if parquet_files:
+            print(f"  ✓ Parquet already exists at: {volume_parquet_path}")
+            return volume_parquet_path
     
-    # Only clean temp directories if force_recreate is True
+    print(f"  Converting full dataset: {len(dataset):,} samples to Parquet...")
+    
+    # Clean temp directories if force_recreate is True
     if force_recreate:
         if os.path.exists(local_parquet_path):
             shutil.rmtree(local_parquet_path)
@@ -343,20 +349,25 @@ def convert_arrow_to_parquet(dataset, name: str, force_recreate: bool = False):
     print(f"    Copying to Volume...")
     dbutils.fs.cp(
         f"file:{local_parquet_path}/",
-        f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME_NAME}/geneformer/data/dataset/temp_parquet_{name.lower()}",
+        f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME_NAME}/geneformer/data/dataset/temp_parquet_full",
         recurse=True
     )
     print(f"    Copied to: {volume_parquet_path}")
     
-    return local_parquet_path, volume_parquet_path
+    # Cleanup local temp (local SSD is ephemeral anyway)
+    if os.path.exists(local_parquet_path):
+        shutil.rmtree(local_parquet_path)
+        print(f"    Cleaned up local temp: {local_parquet_path}")
+    
+    return volume_parquet_path
 
 
-def convert_parquet_to_mds(volume_parquet_path: str, output_path: str, name: str = "", num_partitions: int = None):
+def convert_sparkdf_to_mds(spark_df, output_path: str, name: str = "", num_partitions: int = None):
     """
-    Convert Parquet file to MDS format using Spark's dataframe_to_mds.
+    Convert Spark DataFrame to MDS format using Spark's dataframe_to_mds.
     
     Args:
-        volume_parquet_path: Path to Parquet file on Volume (Spark-accessible)
+        spark_df: Spark DataFrame to convert
         output_path: Output path for MDS files
         name: Name for logging
         num_partitions: Number of partitions (auto-detected if None)
@@ -369,11 +380,8 @@ def convert_parquet_to_mds(volume_parquet_path: str, output_path: str, name: str
     if num_partitions is None:
         num_partitions = get_optimal_partitions()
     
-    # Load Parquet into Spark DataFrame
-    print(f"  Loading {name} Parquet into Spark DataFrame...")
-    spark_df = spark.read.parquet(volume_parquet_path)
     row_count = spark_df.count()
-    print(f"    Loaded {row_count:,} rows")
+    print(f"    {name}: {row_count:,} rows")
     
     # Cast length to LongType to match expected 'int64'
     spark_df = spark_df.withColumn("length", col("length").cast(LongType()))
@@ -397,10 +405,10 @@ def convert_parquet_to_mds(volume_parquet_path: str, output_path: str, name: str
         'size_limit': '256mb'
     }
     
-    print(f"  Writing {name} MDS with dataframe_to_mds ({num_partitions} parallel writers)...")
+    print(f"    Writing {name} MDS with dataframe_to_mds ({num_partitions} parallel writers)...")
     dataframe_to_mds(spark_df, merge_index=True, mds_kwargs=mds_kwargs)
     
-    print(f"  {name} MDS complete!")
+    print(f"    ✓ {name} MDS complete!")
 
 
 def prepare_mds_dataset(force_recreate: bool = False, num_partitions: int = None):
@@ -410,10 +418,10 @@ def prepare_mds_dataset(force_recreate: bool = False, num_partitions: int = None
     
     Optimized pipeline:
     1. Load source dataset ONCE
-    2. Split into train/test
-    3. Convert BOTH to Parquet (Arrow → Parquet) - one-time Arrow access
-    4. Convert Parquet → MDS for each split
-    5. Cleanup temp files if force_recreate=True
+    2. Convert FULL dataset to Parquet (Arrow → Parquet) - single conversion
+    3. Load Parquet into Spark DataFrame
+    4. Split in Spark (randomSplit) - proper train/test split
+    5. Convert each split to MDS
     
     Args:
         force_recreate: If True, recreate even if MDS already exists
@@ -457,58 +465,49 @@ def prepare_mds_dataset(force_recreate: bool = False, num_partitions: int = None
     print(f"  Total samples: {len(dataset):,}")
     
     # =========================================
-    # STEP 2: Split dataset
+    # STEP 2: Convert FULL dataset to Parquet
+    # (Single Arrow → Parquet conversion)
     # =========================================
-    print(f"\nStep 2: Splitting dataset (test_size={TEST_SPLIT_RATIO}, seed={RANDOM_SEED})...")
-    split = dataset.train_test_split(test_size=TEST_SPLIT_RATIO, seed=RANDOM_SEED)
-    train_ds, test_ds = split["train"], split["test"]
-    print(f"  Train samples: {len(train_ds):,}")
-    print(f"  Test samples: {len(test_ds):,}")
+    print(f"\nStep 2: Converting full Arrow dataset to Parquet...")
+    volume_parquet_path = convert_arrow_to_parquet(dataset, force_recreate=force_recreate)
+    print(f"  ✓ Full dataset converted to Parquet: {volume_parquet_path}")
+    
+    # Free memory - we no longer need the HuggingFace dataset
+    del dataset
     
     # =========================================
-    # STEP 3: Convert BOTH datasets to Parquet
-    # (Arrow access happens only once per dataset)
+    # STEP 3: Load Parquet into Spark DataFrame
     # =========================================
-    print(f"\nStep 3: Converting Arrow to Parquet (both train and test)...")
-    train_local_pq, train_volume_pq = convert_arrow_to_parquet(train_ds, "train", force_recreate=force_recreate)
-    test_local_pq, test_volume_pq = convert_arrow_to_parquet(test_ds, "test", force_recreate=force_recreate)
-    print(f"  ✓ Both datasets converted to Parquet")
-    
-    # Free memory - we no longer need the HuggingFace datasets
-    # del dataset, split, train_ds, test_ds
+    print(f"\nStep 3: Loading Parquet into Spark DataFrame...")
+    spark_df = spark.read.parquet(volume_parquet_path)
+    total_count = spark_df.count()
+    print(f"  Loaded {total_count:,} rows into Spark DataFrame")
     
     # =========================================
-    # STEP 4: Convert Parquet to MDS
+    # STEP 4: Split in Spark
     # =========================================
-    print(f"\nStep 4: Converting Parquet to MDS...")
+    print(f"\nStep 4: Splitting in Spark (test_ratio={TEST_SPLIT_RATIO}, seed={RANDOM_SEED})...")
+    train_ratio = 1.0 - TEST_SPLIT_RATIO
+    train_df, test_df = spark_df.randomSplit([train_ratio, TEST_SPLIT_RATIO], seed=RANDOM_SEED)
+    print(f"  Split ratios: train={train_ratio}, test={TEST_SPLIT_RATIO}")
+    
+    # =========================================
+    # STEP 5: Convert each split to MDS
+    # =========================================
+    print(f"\nStep 5: Converting splits to MDS...")
     
     print(f"\n  [Train] {PATHS['train_dir']}")
-    convert_parquet_to_mds(train_volume_pq, PATHS['train_dir'], name="Train", num_partitions=num_partitions)
+    convert_sparkdf_to_mds(train_df, PATHS['train_dir'], name="Train", num_partitions=num_partitions)
     train_size = get_dir_size(PATHS['train_dir'])
     print(f"  ✓ Train MDS complete: {train_size}")
     
     print(f"\n  [Test] {PATHS['test_dir']}")
-    convert_parquet_to_mds(test_volume_pq, PATHS['test_dir'], name="Test", num_partitions=num_partitions)
+    convert_sparkdf_to_mds(test_df, PATHS['test_dir'], name="Test", num_partitions=num_partitions)
     test_size = get_dir_size(PATHS['test_dir'])
     print(f"  ✓ Test MDS complete: {test_size}")
     
-    # =========================================
-    # STEP 5: Cleanup temp files (if force_recreate)
-    # =========================================
-    if force_recreate:
-        print(f"\nStep 5: Cleaning up temp files (force_recreate=True)...")
-        for local_pq, volume_pq in [(train_local_pq, train_volume_pq), (test_local_pq, test_volume_pq)]:
-            if os.path.exists(local_pq):
-                shutil.rmtree(local_pq)
-            if os.path.exists(volume_pq):
-                shutil.rmtree(volume_pq)
-        print(f"  ✓ Temp files cleaned")
-    else:
-        print(f"\nStep 5: Keeping temp Parquet files for potential reuse:")
-        print(f"  - Train (local): {train_local_pq}")
-        print(f"  - Train (volume): {train_volume_pq}")
-        print(f"  - Test (local): {test_local_pq}")
-        print(f"  - Test (volume): {test_volume_pq}")
+    # Note: Keeping temp Parquet in volume for potential reuse
+    print(f"\nParquet file kept at: {volume_parquet_path}")
     
     elapsed = time.time() - start_time
     print("\n" + "=" * 60)
