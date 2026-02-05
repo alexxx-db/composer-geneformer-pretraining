@@ -285,7 +285,7 @@ def get_optimal_partitions():
         sc = spark.sparkContext
         
         # Calculate total cores and optimal partitions (2-4x cores is usually good)
-        total_cores = int(sc.defaultParallelism())
+        total_cores = sc.defaultParallelism
         optimal_partitions = total_cores * 2  # 2x cores for good parallelism
         
         # Clamp to reasonable range
