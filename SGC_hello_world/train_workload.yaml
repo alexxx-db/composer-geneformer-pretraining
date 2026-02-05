@@ -7,19 +7,14 @@ compute:
   gpus: 2
   gpu_type: a10
 max_retries: 0
-# code_source:
-#   type: snapshot
-#   snapshot:
-#     # git branch and commit are not required for local development
-#     # git_branch: sgc_cli_guanyu
-#     # git_commit: fa5c16c888c47c93f8afd48ae0aa58ba48898acd
-#     # repo_path is required for local development, and changes git commit is required for job submission
-#     repo_path: /Users/guanyu.chen/Documents/Projects/composer_geneformer_pretrain/
 code_source:
-  type: git_clone
-  git_repo: srijitcn/composer_geneformer_pretrain
-  git_branch: sgc_cli_guanyu # use your branch
-  ssh_clone: true # Should be true if using a private repo
+  type: snapshot
+  snapshot:
+    # git branch and commit are not required for local development
+    # git_branch: sgc_cli_guanyu
+    # git_commit: fa5c16c888c47c93f8afd48ae0aa58ba48898acd
+    # repo_path is required for local development, and changes git commit is required for job submission
+    repo_path: /Users/guanyu.chen/Documents/Projects/composer_geneformer_pretrain/
 command: |-
   cd $HOME/composer_geneformer_pretrain/SGC_hello_world
   echo ">>> In SGC_hello_world folder, starting training"
