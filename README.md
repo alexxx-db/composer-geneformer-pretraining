@@ -6,7 +6,7 @@ This repository contains examples for running distributed training workloads on 
 
 ```
 ├── SGC_hello_world/          # Simple hello world example (A10 GPUs)
-├── sgc_geneformer_final/     # Geneformer pretraining (H100 GPUs)
+├── SGC_geneformer/           # Geneformer pretraining (H100 GPUs)
 ├── sgcli_wheel/              # SGCLI wheel package
 └── README.md
 ```
@@ -136,7 +136,7 @@ Example: `/Volumes/main/guanyu_chen/sgc/`
 
 #### 1.2 Run Data Preparation Notebook
 
-Import `sgc_geneformer_final/data_preparation.py` as a Databricks notebook and run it on a CPU cluster.
+Import `SGC_geneformer/data_preparation.py` as a Databricks notebook and run it on a CPU cluster.
 
 **Before running, update the configuration at the top:**
 
@@ -175,7 +175,7 @@ The notebook will:
 
 #### 2.1 Update `parameters.yaml`
 
-Edit `sgc_geneformer_final/parameters.yaml`:
+Edit `SGC_geneformer/parameters.yaml`:
 
 ```yaml
 # ============================================
@@ -213,7 +213,7 @@ eval_subset_num_batches: 10    # Set to -1 for full eval
 
 #### 2.2 Update `train.yaml`
 
-Edit `sgc_geneformer_final/train.yaml`:
+Edit `SGC_geneformer/train.yaml`:
 
 ```yaml
 experiment_name: geneformer-<your-name>  # Change this
@@ -244,7 +244,7 @@ loggers:
 ### Step 3: Submit Training Job
 
 ```bash
-cd sgc_geneformer_final
+cd SGC_geneformer
 sgcli run -f train.yaml --watch
 ```
 
