@@ -10,7 +10,17 @@
 experiment_name: geneformer-sgc-cli
 environment:
   env_variables:
+    # NCCL settings for multi-node H100 training
     NCCL_DEBUG: "INFO"
+    NCCL_SOCKET_IFNAME: "eth"            # Use eth interfaces (auto-match eth0, eth1, etc.)
+    NCCL_IB_DISABLE: "1"                 # Disable InfiniBand if not available
+    NCCL_ASYNC_ERROR_HANDLING: "1"       # Better async error handling
+    NCCL_TIMEOUT: "1800"                 # 30 min timeout for large barrier ops
+    # PyTorch distributed settings
+    TORCH_DISTRIBUTED_DEBUG: "DETAIL"    # More verbose debugging
+    TORCH_NCCL_BLOCKING_WAIT: "1"        # Use blocking wait for better error reporting
+    # Increase TCP store timeout for multi-node coordination
+    TORCH_DIST_INIT_BARRIER_TIMEOUT: "1800"
   dependencies: dependencies.yaml
 compute:
   gpus: 8
