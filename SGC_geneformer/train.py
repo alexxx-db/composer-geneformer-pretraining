@@ -44,6 +44,9 @@ class FailureTestCallback(Callback):
     The callback tracks the number of failures using a persistent file and only
     fails up to `max_failures` times. After that, training continues normally.
     
+    IMPORTANT: In distributed training, only rank 0 manages the failure counter
+    to avoid race conditions and double-counting across nodes.
+    
     Args:
         fail_at_epoch: The epoch number at which to trigger a failure (0-indexed)
         max_failures: Maximum number of times to fail before allowing training to continue
@@ -69,23 +72,17 @@ class FailureTestCallback(Callback):
         self.max_failures = max_failures
         self.failure_counter_path = failure_counter_path
         self.enabled = enabled
+        self._should_fail = False  # Will be set by rank 0 and used by all ranks
+        self._new_count = 0
         
-        if self.enabled:
-            print(f"\n{'='*60}")
-            print("⚠️  FAILURE TEST MODE ENABLED")
-            print(f"{'='*60}")
-            print(f"  - Will fail at epoch: {self.fail_at_epoch}")
-            print(f"  - Max failures: {self.max_failures}")
-            print(f"  - Counter file: {self.failure_counter_path}")
-            
-            current_count = self._get_failure_count()
-            print(f"  - Current failure count: {current_count}")
-            
-            if current_count >= self.max_failures:
-                print(f"  - Status: Already failed {current_count} times, will NOT fail again")
-            else:
-                print(f"  - Status: Will fail {self.max_failures - current_count} more time(s)")
-            print(f"{'='*60}\n")
+    def _is_rank_zero(self) -> bool:
+        """Check if this is the main process (rank 0)."""
+        return dist.get_global_rank() == 0
+    
+    def _log_rank_zero(self, message: str):
+        """Print message only on rank 0 to avoid duplicate logs."""
+        if self._is_rank_zero():
+            print(message)
     
     def _get_failure_count(self) -> int:
         """Read the current failure count from the counter file."""
@@ -99,7 +96,7 @@ class FailureTestCallback(Callback):
         return 0
     
     def _increment_failure_count(self) -> int:
-        """Increment and persist the failure count. Returns the new count."""
+        """Increment and persist the failure count. Returns the new count. Only call from rank 0."""
         current_count = self._get_failure_count()
         new_count = current_count + 1
         
@@ -116,49 +113,94 @@ class FailureTestCallback(Callback):
         return new_count
     
     def _reset_failure_count(self):
-        """Reset the failure counter (call after successful training completion)."""
+        """Reset the failure counter (call after successful training completion). Only call from rank 0."""
         if os.path.exists(self.failure_counter_path):
             os.remove(self.failure_counter_path)
             print(f"🔄 Failure counter reset: {self.failure_counter_path}")
+    
+    def _print_status(self):
+        """Print the failure test status. Only call from rank 0."""
+        current_count = self._get_failure_count()
+        print(f"\n{'='*60}")
+        print("⚠️  FAILURE TEST MODE ENABLED")
+        print(f"{'='*60}")
+        print(f"  - Will fail at epoch: {self.fail_at_epoch}")
+        print(f"  - Max failures: {self.max_failures}")
+        print(f"  - Counter file: {self.failure_counter_path}")
+        print(f"  - Current failure count: {current_count}")
+        
+        if current_count >= self.max_failures:
+            print(f"  - Status: Already failed {current_count} times, will NOT fail again")
+        else:
+            print(f"  - Status: Will fail {self.max_failures - current_count} more time(s)")
+        print(f"{'='*60}\n")
     
     def run_event(self, event: Event, state: State, logger: Logger):
         """Called at each training event."""
         if not self.enabled:
             return
         
+        # Print status at the start of training (only on rank 0)
+        if event == Event.FIT_START:
+            if self._is_rank_zero():
+                self._print_status()
+        
         # Check at epoch start
         if event == Event.EPOCH_START:
             current_epoch = int(state.timestamp.epoch)
             
             if current_epoch == self.fail_at_epoch:
-                failure_count = self._get_failure_count()
-                
-                if failure_count < self.max_failures:
-                    # Increment counter and fail
-                    new_count = self._increment_failure_count()
+                # Only rank 0 reads/writes the counter and makes the decision
+                if self._is_rank_zero():
+                    failure_count = self._get_failure_count()
                     
+                    if failure_count < self.max_failures:
+                        # Increment counter
+                        self._new_count = self._increment_failure_count()
+                        self._should_fail = True
+                    else:
+                        self._should_fail = False
+                        print(f"\n{'='*60}")
+                        print(f"✅ FAILURE TEST: Skipping failure (already failed {failure_count} times)")
+                        print(f"   Training will continue normally from checkpoint")
+                        print(f"{'='*60}\n")
+                
+                # Synchronize all ranks - ensure rank 0 has written the counter file
+                dist.barrier()
+                
+                # All ranks read the decision (by reading the counter file)
+                # This ensures consistency across all ranks
+                failure_count = self._get_failure_count()
+                should_fail = failure_count <= self.max_failures and failure_count > 0
+                
+                # Re-check: if we just incremented, we should fail
+                # The counter was incremented by rank 0, so if count > 0 and count <= max, fail
+                if self._is_rank_zero() and self._should_fail:
                     error_msg = (
                         f"\n{'='*60}\n"
                         f"💥 INTENTIONAL FAILURE (Test Mode)\n"
                         f"{'='*60}\n"
                         f"  Epoch: {current_epoch}\n"
-                        f"  Failure count: {new_count}/{self.max_failures}\n"
-                        f"  Remaining failures: {self.max_failures - new_count}\n"
+                        f"  Failure count: {self._new_count}/{self.max_failures}\n"
+                        f"  Remaining failures: {self.max_failures - self._new_count}\n"
                         f"{'='*60}\n"
                         f"This failure is intentional to test checkpoint recovery.\n"
                         f"The job should restart and resume from the last checkpoint.\n"
                         f"{'='*60}"
                     )
+                    # Raise on rank 0 - this will cause the distributed training to fail
                     raise RuntimeError(error_msg)
-                else:
-                    print(f"\n{'='*60}")
-                    print(f"✅ FAILURE TEST: Skipping failure (already failed {failure_count} times)")
-                    print(f"   Training will continue normally from checkpoint")
-                    print(f"{'='*60}\n")
+                elif not self._is_rank_zero() and should_fail:
+                    # Non-rank-0 processes also need to fail to ensure clean shutdown
+                    # Wait a moment for rank 0's error to propagate
+                    import time
+                    time.sleep(2)
+                    raise RuntimeError(f"Intentional failure (rank {dist.get_global_rank()})")
         
-        # Reset counter when training completes successfully
+        # Reset counter when training completes successfully (only on rank 0)
         if event == Event.FIT_END:
-            self._reset_failure_count()
+            if self._is_rank_zero():
+                self._reset_failure_count()
 
 
 def build_volume_path(cfg: DictConfig) -> str:
