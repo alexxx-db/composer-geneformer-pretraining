@@ -28,7 +28,7 @@ SCHEMA = "guanyu_chen"
 VOLUME_NAME = "sgc"
 
 # Data paths (relative to volume root)
-TOKEN_DICT_PATH = "geneformer/token_dictionary.pkl"
+TOKEN_DICT_PATH = "geneformer/data/token_dictionary.pkl"
 SOURCE_DATASET_PATH = "geneformer/data/dataset/genecorpus_30M_2048.dataset"
 STREAMING_DATASET_PATH = "geneformer/data/dataset/streaming/genecorpus_30M_2048.dataset"
 

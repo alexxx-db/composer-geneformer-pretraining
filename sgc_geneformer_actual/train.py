@@ -140,7 +140,6 @@ def main(cfg: DictConfig):
     print(f"Using num_canonical_nodes={num_canonical_nodes} for StreamingDataset")
     
     streaming_dataset_train = StreamingDataset(
-        # local=f"{local_streaming_dataset_location}/train",
         remote=f"{local_streaming_dataset_location}/train",  # Read compressed data from here
         local="/local_disk0/streaming_cache/train",          # Cache decompressed data here (local SSD)
         batch_size=train_batch_size,
@@ -148,7 +147,6 @@ def main(cfg: DictConfig):
         shuffle=True,  # Enable shuffling for training
     )
     streaming_dataset_eval = StreamingDataset(
-        #local=f"{local_streaming_dataset_location}/test",
         remote=f"{local_streaming_dataset_location}/test",  # Read compressed data from here
         local="/local_disk0/streaming_cache/test",          # Cache decompressed data here (local SSD)
         batch_size=eval_batch_size,
