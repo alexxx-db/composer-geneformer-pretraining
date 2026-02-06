@@ -63,7 +63,7 @@ export DATABRICKS_CONFIG_PROFILE=DEFAULT
 ### Step 5: Install SGCLI
 
 ```bash
-pip install sgcli_wheel/databricks_serverless_gpu_cli-0.0.2-py3-none-any.whl --force-reinstall
+pip install sgcli_wheel/databricks_serverless_gpu_cli-0.0.3-py3-none-any.whl --force-reinstall
 ```
 
 Verify installation:
@@ -256,6 +256,112 @@ sgcli run -f train.yaml --watch
 
 ---
 
+## Part 4: Testing Failure Recovery (Optional)
+
+This section describes how to test checkpoint recovery and autoresume functionality by intentionally failing training at a specific epoch.
+
+### Overview
+
+The `FailureTestCallback` allows you to:
+- Intentionally crash training at a specified epoch
+- Test that SGCLI correctly retries the job
+- Verify that training resumes from the last checkpoint
+- Confirm the job completes successfully after N failures
+
+### Step 1: Enable Failure Testing
+
+Edit `SGC_geneformer/parameters.yaml`:
+
+```yaml
+# Auto resume (required for failure recovery)
+autoresume: True
+
+# ============================================
+# Failure Test Configuration
+# ============================================
+failure_test:
+  enabled: true           # Enable failure testing
+  fail_at_epoch: 7        # Fail at epoch 7 (0-indexed)
+  max_failures: 3         # Fail 3 times, then continue on 4th attempt
+```
+
+### Step 2: Configure SGCLI Retries
+
+Edit `SGC_geneformer/train.yaml`:
+
+```yaml
+max_retries: 3  # Must be >= max_failures for automatic recovery
+```
+
+**Important**: Set `max_retries` >= `max_failures` so SGCLI automatically restarts the job after each failure.
+
+### Step 3: Configure Checkpoints
+
+Ensure checkpoints are saved before the failure epoch:
+
+```yaml
+# parameters.yaml
+save_interval: 5ep        # Save checkpoint every 5 epochs
+max_duration: 20ep        # Total training duration
+```
+
+With `fail_at_epoch: 7` and `save_interval: 5ep`, a checkpoint is saved at epoch 5 before the failure at epoch 7.
+
+### Step 4: Submit and Watch
+
+```bash
+cd SGC_geneformer
+sgcli run -f train.yaml --watch
+```
+
+### Expected Behavior
+
+| Attempt | What Happens |
+|---------|--------------|
+| 1 | Train epochs 0-5, save checkpoint, fail at epoch 7 |
+| 2 | Resume from epoch 5, fail at epoch 7 |
+| 3 | Resume from epoch 5, fail at epoch 7 |
+| 4 | Resume from epoch 5, **skip failure**, complete training |
+
+### Console Output
+
+**On failure (attempts 1-3):**
+```
+============================================================
+💥 INTENTIONAL FAILURE (Test Mode)
+============================================================
+  Epoch: 7
+  Failure count: 2/3
+  Remaining failures: 1
+============================================================
+```
+
+**On successful continue (attempt 4):**
+```
+============================================================
+✅ FAILURE TEST: Skipping failure (already failed 3 times)
+   Training will continue normally from checkpoint
+============================================================
+```
+
+### How It Works
+
+1. **Failure counter**: Stored in `{checkpoint_folder}/failure_counter.json`
+2. **Distributed sync**: Uses `torch.distributed.broadcast` to ensure all ranks fail/continue together
+3. **Persistence**: Counter persists across job restarts via the shared volume
+4. **Auto-reset**: Counter resets when training completes successfully
+
+### Disable After Testing
+
+Remember to disable failure testing for production runs:
+
+```yaml
+failure_test:
+  enabled: false
+```
+
+---
+
 ## Configuration Reference
 
 ### train.yaml (Workload Definition)
@@ -336,6 +442,7 @@ sgcli cancel <job-id>
 - [ ] Update `parameters.yaml` with your volume paths
 - [ ] Update `train.yaml` with your repo path
 - [ ] Submit training: `sgcli run -f train.yaml --watch`
+- [ ] (Optional) Test failure recovery with `failure_test.enabled: true`
 
 ---
 

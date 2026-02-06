@@ -1,6 +1,7 @@
 ##1 Set parameters
 
 import datetime
+import json
 import os
 import pickle
 import random
@@ -30,6 +31,177 @@ from omegaconf import DictConfig
 from omegaconf import OmegaConf as om
 
 from cfgutils import *
+
+
+# ============================================
+# Failure Testing Callback
+# ============================================
+class FailureTestCallback(Callback):
+    """
+    A callback that intentionally fails training at a specified epoch to test 
+    checkpoint recovery and autoresume functionality.
+    
+    The callback tracks the number of failures using a persistent file and only
+    fails up to `max_failures` times. After that, training continues normally.
+    
+    IMPORTANT: In distributed training, only rank 0 manages the failure counter
+    to avoid race conditions and double-counting across nodes.
+    
+    Args:
+        fail_at_epoch: The epoch number at which to trigger a failure (0-indexed)
+        max_failures: Maximum number of times to fail before allowing training to continue
+        failure_counter_path: Path to file that tracks failure count across restarts
+        enabled: Whether the failure testing is enabled
+    
+    Example usage in parameters.yaml:
+        failure_test:
+          enabled: true
+          fail_at_epoch: 7
+          max_failures: 3
+          failure_counter_path: /Volumes/.../failure_counter.json
+    """
+    
+    def __init__(
+        self,
+        fail_at_epoch: int = 7,
+        max_failures: int = 3,
+        failure_counter_path: str = "/tmp/failure_counter.json",
+        enabled: bool = False,
+    ):
+        self.fail_at_epoch = fail_at_epoch
+        self.max_failures = max_failures
+        self.failure_counter_path = failure_counter_path
+        self.enabled = enabled
+        self._should_fail = False  # Will be set by rank 0 and used by all ranks
+        self._new_count = 0
+        
+    def _is_rank_zero(self) -> bool:
+        """Check if this is the main process (rank 0)."""
+        return dist.get_global_rank() == 0
+    
+    def _log_rank_zero(self, message: str):
+        """Print message only on rank 0 to avoid duplicate logs."""
+        if self._is_rank_zero():
+            print(message)
+    
+    def _get_failure_count(self) -> int:
+        """Read the current failure count from the counter file."""
+        if os.path.exists(self.failure_counter_path):
+            try:
+                with open(self.failure_counter_path, 'r') as f:
+                    data = json.load(f)
+                    return data.get('failure_count', 0)
+            except (json.JSONDecodeError, IOError):
+                return 0
+        return 0
+    
+    def _increment_failure_count(self) -> int:
+        """Increment and persist the failure count. Returns the new count. Only call from rank 0."""
+        current_count = self._get_failure_count()
+        new_count = current_count + 1
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(self.failure_counter_path), exist_ok=True)
+        
+        with open(self.failure_counter_path, 'w') as f:
+            json.dump({
+                'failure_count': new_count,
+                'last_failure_epoch': self.fail_at_epoch,
+                'max_failures': self.max_failures,
+            }, f, indent=2)
+        
+        return new_count
+    
+    def _reset_failure_count(self):
+        """Reset the failure counter (call after successful training completion). Only call from rank 0."""
+        if os.path.exists(self.failure_counter_path):
+            os.remove(self.failure_counter_path)
+            print(f"🔄 Failure counter reset: {self.failure_counter_path}")
+    
+    def _print_status(self):
+        """Print the failure test status. Only call from rank 0."""
+        current_count = self._get_failure_count()
+        print(f"\n{'='*60}")
+        print("⚠️  FAILURE TEST MODE ENABLED")
+        print(f"{'='*60}")
+        print(f"  - Will fail at epoch: {self.fail_at_epoch}")
+        print(f"  - Max failures: {self.max_failures}")
+        print(f"  - Counter file: {self.failure_counter_path}")
+        print(f"  - Current failure count: {current_count}")
+        
+        if current_count >= self.max_failures:
+            print(f"  - Status: Already failed {current_count} times, will NOT fail again")
+        else:
+            print(f"  - Status: Will fail {self.max_failures - current_count} more time(s)")
+        print(f"{'='*60}\n")
+    
+    def run_event(self, event: Event, state: State, logger: Logger):
+        """Called at each training event."""
+        if not self.enabled:
+            return
+        
+        # Print status at the start of training (only on rank 0)
+        if event == Event.FIT_START:
+            if self._is_rank_zero():
+                self._print_status()
+        
+        # Check at epoch start
+        if event == Event.EPOCH_START:
+            current_epoch = int(state.timestamp.epoch)
+            
+            if current_epoch == self.fail_at_epoch:
+                # Rank 0 makes the decision and increments counter if needed
+                should_fail = False
+                new_count = 0
+                
+                if self._is_rank_zero():
+                    failure_count = self._get_failure_count()
+                    
+                    if failure_count < self.max_failures:
+                        new_count = self._increment_failure_count()
+                        should_fail = True
+                    else:
+                        should_fail = False
+                        print(f"\n{'='*60}")
+                        print(f"✅ FAILURE TEST: Skipping failure (already failed {failure_count} times)")
+                        print(f"   Training will continue normally from checkpoint")
+                        print(f"{'='*60}\n")
+                
+                # Broadcast decision from rank 0 to all ranks using torch.distributed
+                # This ensures all ranks make the same decision
+                should_fail_tensor = torch.tensor([1 if should_fail else 0], dtype=torch.int64, device='cuda')
+                torch.distributed.broadcast(should_fail_tensor, src=0)
+                should_fail = should_fail_tensor.item() == 1
+                
+                # Broadcast the new count for the error message
+                new_count_tensor = torch.tensor([new_count], dtype=torch.int64, device='cuda')
+                torch.distributed.broadcast(new_count_tensor, src=0)
+                new_count = new_count_tensor.item()
+                
+                if should_fail:
+                    # All ranks raise the same error together
+                    rank = dist.get_global_rank()
+                    if rank == 0:
+                        error_msg = (
+                            f"\n{'='*60}\n"
+                            f"💥 INTENTIONAL FAILURE (Test Mode)\n"
+                            f"{'='*60}\n"
+                            f"  Epoch: {current_epoch}\n"
+                            f"  Failure count: {new_count}/{self.max_failures}\n"
+                            f"  Remaining failures: {self.max_failures - new_count}\n"
+                            f"{'='*60}\n"
+                            f"This failure is intentional to test checkpoint recovery.\n"
+                            f"The job should restart and resume from the last checkpoint.\n"
+                            f"{'='*60}"
+                        )
+                    else:
+                        error_msg = f"Intentional failure (rank {rank}, synced with rank 0)"
+                    raise RuntimeError(error_msg)
+        
+        # Reset counter when training completes successfully (only on rank 0)
+        if event == Event.FIT_END:
+            if self._is_rank_zero():
+                self._reset_failure_count()
 
 
 def build_volume_path(cfg: DictConfig) -> str:
@@ -128,6 +300,20 @@ def main(cfg: DictConfig):
         build_callback(name, callback_cfg)
         for name, callback_cfg in cfg.get('callbacks', {}).items()
     ]
+    
+    # Add FailureTestCallback if enabled in config
+    failure_test_cfg = cfg.get('failure_test', {})
+    if failure_test_cfg.get('enabled', False):
+        # Default failure counter path in the checkpoint folder
+        default_counter_path = f"{checkpoint_folder}/failure_counter.json"
+        
+        failure_callback = FailureTestCallback(
+            fail_at_epoch=failure_test_cfg.get('fail_at_epoch', 7),
+            max_failures=failure_test_cfg.get('max_failures', 3),
+            failure_counter_path=failure_test_cfg.get('failure_counter_path', default_counter_path),
+            enabled=True,
+        )
+        callbacks.append(failure_callback)
 
     # Algorithms
     algorithms = [
