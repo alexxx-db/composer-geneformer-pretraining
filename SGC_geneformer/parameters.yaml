@@ -84,10 +84,10 @@ mlm_probability: 0.15
 train_batch_size: 16
 eval_batch_size: 16
 device_train_microbatch_size: 16
-train_subset_num_batches: 100  # -1 means use all batches
-eval_subset_num_batches: 20   # -1 means use all batches
-max_duration: 20ep
-eval_interval: 5ep
+train_subset_num_batches: 512  # -1 means use all batches
+eval_subset_num_batches: 128   # -1 means use all batches
+max_duration: 100ep
+eval_interval: 10ep
 
 # Logging
 progress_bar: false
@@ -104,12 +104,12 @@ autoresume: True
 # to test that autoresume correctly picks up from the last checkpoint.
 # After max_failures, training will continue normally.
 failure_test:
-  enabled: true          # Set to true to enable failure testing
+  enabled: false          # Set to true to enable failure testing
   fail_at_epoch: 7        # Epoch at which to trigger failure (0-indexed)
   max_failures: 3         # Fail this many times, then continue normally
   # failure_counter_path: auto  # Optional: defaults to checkpoint_folder/failure_counter.json
 
 # Checkpoint settings
-save_interval: 5ep
+save_interval: 10ep
 save_num_checkpoints_to_keep: 100
 save_overwrite: True

@@ -23,9 +23,9 @@ environment:
     TORCH_DIST_INIT_BARRIER_TIMEOUT: "1800"
   dependencies: dependencies.yaml
 compute:
-  gpus: 8
-  gpu_type: a10
-max_retries: 3
+  gpus: 16
+  gpu_type: h100
+max_retries: 0
 code_source:
   type: snapshot
   snapshot:
