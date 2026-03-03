@@ -5,6 +5,15 @@ sh geneformer_prep.sh
 echo ">>> Installing dependencies"
 pip install -r requirements.txt
 
+# Uninstall existing torch (e.g., 2.7.0) and install torch 2.8
+pip uninstall -y torch torchvision torchaudio
+pip install --no-cache-dir torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cu126
+
+# Verify versions
+python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+python -c "import mlflow; print(f'MLflow: {mlflow.__version__}')"
+
 # Create working directory
 mkdir -p /pretrain/temp
 

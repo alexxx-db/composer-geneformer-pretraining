@@ -10,9 +10,9 @@ max_retries: 0
 code_source:
   type: snapshot
   snapshot:
-    # allow_uncommitted: true
+    allow_uncommitted: true
     # repo_path is local path for your repo, and changes git commit is required for job submission
-    repo_path: /Users/guanyu.chen/Documents/Projects/
+    repo_path: /Users/guanyu.chen/Documents/Projects/composer_geneformer_pretrain/
 command: |-
   echo ">>> In SGC_hello_world folder, starting training"
   
