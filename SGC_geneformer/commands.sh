@@ -2,8 +2,8 @@ echo ">>> Installing Geneformer"
 cd /composer_geneformer_pretrain
 sh geneformer_prep.sh 
 
-echo ">>> Installing dependencies"
-pip install -r requirements.txt
+# echo ">>> Installing dependencies"
+# pip install -r requirements.txt
 
 # Uninstall existing torch (e.g., 2.7.0) and install torch 2.8
 pip uninstall -y torch torchvision torchaudio
