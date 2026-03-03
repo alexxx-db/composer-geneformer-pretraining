@@ -447,7 +447,7 @@ def main(cfg: DictConfig):
         autoresume=cfg.get("autoresume", False),
         python_log_level=cfg.get("python_log_level", None),
         seed=seed_val,        
-        fsdp_config=cfg.get("fsdp_config", None),
+        parallelism_config={"fsdp": cfg.get("fsdp_config", None)},
         loggers=loggers,
         callbacks=callbacks,
     )
