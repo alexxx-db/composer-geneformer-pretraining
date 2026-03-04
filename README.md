@@ -63,7 +63,7 @@ export DATABRICKS_CONFIG_PROFILE=DEFAULT
 ### Step 5: Install SGCLI
 
 ```bash
-pip install sgcli_wheel/databricks_serverless_gpu_cli-0.0.3-py3-none-any.whl --force-reinstall
+pip install sgcli_wheel/databricks_serverless_gpu_cli-0.0.4-py3-none-any.whl --force-reinstall
 ```
 
 Verify installation:
@@ -389,10 +389,14 @@ failure_test:
 ```yaml
 version: "4"
 dependencies:
-  - mosaicml==0.23.5
-  - mosaicml-streaming==0.8.0
+  - mosaicml==0.32.1
+  - mosaicml-streaming==0.13.0
   - transformers==4.44.0
+  - mlflow>=3.6.0
   # ... other packages
+
+# Additionally installed via commands.sh:
+# torch==2.8.0, torchvision==0.23.0, torchaudio==2.8.0 (CUDA 12.6)
 ```
 
 ---
