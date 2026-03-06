@@ -38,4 +38,5 @@ command: |-
   sh commands.sh
   echo ">>> Starting training"
   export MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING=true
+  export MLFLOW_SYSTEM_METRICS_NODE_ID="node_$NODE_RANK"
   composer train.py parameters.yaml
