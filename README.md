@@ -63,7 +63,7 @@ export DATABRICKS_CONFIG_PROFILE=DEFAULT
 ### Step 5: Install SGCLI
 
 ```bash
-pip install sgcli_wheel/databricks_serverless_gpu_cli-0.0.4-py3-none-any.whl --force-reinstall
+pip install sgcli_wheel/databricks_serverless_gpu_cli-0.0.5-py3-none-any.whl --force-reinstall
 ```
 
 Verify installation:
@@ -455,3 +455,48 @@ sgcli cancel <job-id>
 - [Databricks Serverless GPU Docs](https://docs.databricks.com/aws/en/compute/serverless/gpu)
 - [MosaicML Composer Docs](https://docs.mosaicml.com/projects/composer/)
 - [Geneformer Paper](https://www.nature.com/articles/s41586-023-06139-9)
+
+---
+
+## SGCLI Changelog
+
+### Version 0.0.5
+
+- [Bug-fix] Remove print_error from env_secrets
+- [CNXT-1859] Remove python script from sgcli
+- [Bug-fix] Fix uncommitted snapshot code path directories
+- [Bug-fix] Fix call to experiment creation
+- [CNXT-1778] Add color for sgcli
+- [CNXT-1844] Remove git clone from cli src
+- [CNXT-1727] Fix bug in setting permissions in config
+- [CNXT-1832] Improve performance of `sgcli get runs` command
+- [CNXT-1784] Provide yaml pointers from sgcli tool
+- [CNXT-1638] Add dry run command
+- [CNXT-1828] Add budget policy attribution field
+
+### Version 0.0.4
+
+- [CNXT-1817] Fix uncommitted changes not being captured in snapshot. Also allows include_paths when changes are outside those paths.
+- [CNXT-1809] Update log syntax and allow for downloading to a specified directory
+- [CNXT-1806] Add support for automatic permission granting after job submission with `grant_permissions` field.
+- [CNXT-1638] Make logs from dependency installation unbuffered
+
+### Version 0.0.3
+
+- [CNXT-1727] Allow uncommitted changes and simplify git UX.
+- [CNXT-1759] Add support non git folders.
+- [CNXT-1713] Add support for variable interpretation in local and remote.
+- [Bug-fix] Fix hardcoded email from databricks.com to actual user email.
+
+### Version 0.0.2
+
+- [CNXT-1727] Support for subfolders in snapshot via git archive. This is a major update to speed up snapshot especially in large repos.
+- [CNXT-1716] Remove unique suffix from job run names. Experiment corresponds exactly to Job Run name.
+
+### Version 0.0.1
+
+- [CNXT-1727] Add changelog command.
+- [CNXT-1706] Fix get runs hyperlinks and add get status hyperlinks.
+- [CNXT-1713] Add experiment_name validation and reduce log level.
+- [CNXT-1624] Validate fields and gpu num during workload submission.
+- [CNXT-1538] Add Streaming Logs capability.
